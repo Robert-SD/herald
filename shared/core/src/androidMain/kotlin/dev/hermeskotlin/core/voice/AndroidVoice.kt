@@ -96,7 +96,6 @@ class AndroidVoiceRecorder : VoiceRecorder {
             record.release()
             onLevel(0f)
         }
-        // Muted partway: what was heard before is dropped, since the microphone was turned off over it.
         if (muted) return@withContext Recording(ByteArray(0), "audio/wav", heardSpeech = false)
         Recording(wav(pcm.toByteArray()), "audio/wav", endOfSpeech.heardSpeech || finishRequested && pcm.size() > SAMPLE_RATE / 2)
     }
