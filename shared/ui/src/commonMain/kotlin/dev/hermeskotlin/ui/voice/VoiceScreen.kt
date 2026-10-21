@@ -194,14 +194,12 @@ internal fun VoiceScreen(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // What's context-specific goes first; End and Mute follow, together.
                     when {
                         !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
                         canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
                     }
                     EndButton(onEnd)
-                    // Mute in either kind of voice chat: the microphone goes off the same way. It sits beside End,
-                    // so the two ways of changing the call are together.
+                    // Mute sits beside End: the two ways of changing the call are together.
                     if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
                         SideButton(
                             Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff,

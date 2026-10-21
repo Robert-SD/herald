@@ -38,13 +38,11 @@ import kotlin.math.sqrt
 class AndroidVoiceRecorder : VoiceRecorder {
 
     @Volatile private var finishRequested = false
-    /** The microphone is off: a recording in progress lets go of it, and one that starts doesn't. */
     @Volatile private var muted = false
 
     @SuppressLint("MissingPermission") // The UI asks for RECORD_AUDIO before starting.
     override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording = withContext(Dispatchers.IO) {
         finishRequested = false
-        // Muted: the microphone is never opened, so nothing is heard and nothing is kept.
         if (muted) return@withContext Recording(ByteArray(0), "audio/wav", heardSpeech = false)
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val record = AudioRecord(
@@ -123,7 +121,6 @@ class AndroidVoiceRecorder : VoiceRecorder {
     ): Recording? =
         withContext(Dispatchers.IO) {
             finishRequested = false
-            // Muted: the microphone is never opened, so nobody can cut in while it's off.
             if (muted) return@withContext null
             val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val record = try {
@@ -158,7 +155,6 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 onListening()
                 while (true) {
                     ensureActive()
-                    // Muted partway: the microphone lets go of it, and nothing more is heard.
                     if (muted) break
                     val read = record.read(frame, 0, frame.size)
                     if (read < 0) return@withContext null
@@ -200,7 +196,6 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 record.release()
                 onLevel(0f)
             }
-            // Muted partway: what was heard before is dropped, since the microphone was turned off over it.
             if (muted) return@withContext null
             Recording(wav(pcm.toByteArray()), "audio/wav", heardSpeech = bargeIn.spoke || finishRequested)
         }

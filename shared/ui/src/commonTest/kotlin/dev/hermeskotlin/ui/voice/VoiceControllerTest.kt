@@ -608,7 +608,6 @@ class VoiceControllerTest {
             onSpeech()
             val done = CompletableDeferred<Unit>()
             held = done
-            // The microphone went off over the recording: it keeps nothing.
             if (micOff) return Recording(ByteArray(0), "audio/wav", heardSpeech = false)
             done.await()
             return if (micOff) Recording(ByteArray(0), "audio/wav", heardSpeech = false)
@@ -622,7 +621,6 @@ class VoiceControllerTest {
         override fun setMuted(muted: Boolean) {
             micOff = muted
             mutes += muted
-            // The microphone is off: the recording lets go of it.
             if (muted) held?.complete(Unit)
         }
     }
@@ -658,16 +656,14 @@ class VoiceControllerTest {
         val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
 
         voice.startChat(offlineSession(), gateway, null)
-        // The microphone is listening, with the chat waiting on it.
         recorder.listening.first { it >= 1 }
         voice.toggleMute()
 
-        // The listen that was under way is over; no new one starts while the microphone is off.
+        // No new listen starts while the microphone is off.
         testScheduler.advanceUntilIdle()
         assertEquals(1, recorder.recordings)
 
         voice.toggleMute()
-        // Now it listens again.
         recorder.listening.first { it >= 2 }
         assertEquals(2, recorder.recordings)
         voice.stopChat()
@@ -693,9 +689,7 @@ class VoiceControllerTest {
         assertEquals("Tap the microphone to talk again", hint(VoiceChatState(VoicePhase.Listening, muted = true)))
     }
 
-    /**
-     * A recorder that lets someone cut in over the reply, so a mute can land over that listen too.
-     */
+    /** A recorder that lets someone cut in over the reply, so a mute can land over that listen too. */
     private class CuttingInRecorder : VoiceRecorder {
         var recordings = 0
         /** How many times the microphone listened over the reply. */
@@ -724,7 +718,6 @@ class VoiceControllerTest {
             onListening()
             val done = CompletableDeferred<Unit>()
             held = done
-            // Muted: the microphone is off, so nobody can cut in and nothing is heard.
             if (micOff) return null
             done.await()
             return if (micOff) null else Recording(byteArrayOf(4, 5, 6), "audio/wav", heardSpeech = true)
@@ -743,7 +736,6 @@ class VoiceControllerTest {
         val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
 
         voice.startChat(offlineSession(), gateway, null)
-        // The reply is sounding and the microphone is listening over it.
         testScheduler.runCurrent()
         voice.toggleMute()
 

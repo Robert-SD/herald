@@ -200,7 +200,6 @@ class VoiceController(
         stoppedByUser = false
         roomFloor = 0f
         noSpeechStream = null
-        // A mute left over from the last chat doesn't carry into this one.
         muted.value = false
         recorder.setMuted(false)
         // Held now, on the tap: Android only lets the microphone go to the background from the foreground.
@@ -470,8 +469,6 @@ class VoiceController(
     private suspend fun listenOver(activity: VoiceActivity, tripped: CompletableDeferred<Unit>): Recording? {
         val settings = bargeIn?.await() ?: return null
         if (!settings.enabled || cantListenOver) return null
-        // Muted: nobody can cut in, since the microphone is off. The reply goes on as it is; barge-in is
-        // offered again once the microphone comes back.
         if (muted.value) return null
         val detector = BargeIn(settings, activity.silenceMs, roomFloor)
         val heard = try {
@@ -493,7 +490,7 @@ class VoiceController(
             _chat.update { it.copy(bargeIn = false) }
         }
         // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it,
-        // this turn or the next. A mute isn't that: it's asked again once the microphone comes back.
+        // this turn or the next. A mute is asked again once the microphone comes back.
         if (heard == null && !muted.value) cantListenOver = true
         return heard
     }
@@ -642,8 +639,7 @@ class VoiceController(
 
     /** What's said next, as [Heard] tells. An error on show stays through silence, and goes once words come. */
     private suspend fun hear(gateway: GatewayUrl, profile: String?, activity: VoiceActivity): Heard {
-        // Muted: the microphone is off, so there's nothing to hear until it's turned on again. The chat waits
-        // here rather than asking for a recording that would hear nothing.
+        // Muted: the microphone is off, so wait for it rather than ask for a recording that would hear nothing.
         if (muted.value) {
             _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
             muted.first { !it }

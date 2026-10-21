@@ -172,8 +172,6 @@ internal fun VoicePanel(
                 )
             }
             RoundButton(Lucide.PhoneOff, contentDescription = "End voice chat", fill = Theme[colors][danger], tint = Color.White, onClick = onEnd)
-            // Mute in either kind of voice chat: the microphone goes off the same way. It sits beside End, so the
-            // two ways of changing the call are together.
             if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
                 RoundButton(
                     if (state.muted) Lucide.MicOff else Lucide.Mic,
@@ -189,7 +187,6 @@ internal fun VoicePanel(
 
 internal fun label(state: VoiceChatState) = when (state.phase) {
     VoicePhase.Connecting -> "Connecting…"
-    // Muted reads the same in either kind of voice chat: the microphone is off.
     VoicePhase.Listening -> if (state.muted) "Muted" else if (state.hearing) "Hearing you…" else "Listening…"
     VoicePhase.Transcribing -> "Catching that…"
     VoicePhase.Thinking -> "Thinking…"
@@ -202,7 +199,6 @@ internal fun canSendNow(state: VoiceChatState) = !state.live && !state.muted && 
 
 /** What to do now, while there are no words to show. */
 internal fun hint(state: VoiceChatState) = when {
-    // The microphone is off: nothing is heard until it's turned on again.
     state.muted -> "Tap the microphone to talk again"
     state.phase == VoicePhase.Connecting -> "Setting up the call"
     state.phase == VoicePhase.Thinking -> "Hermes is on it"
