@@ -195,11 +195,14 @@ internal fun InCallView(state: PhoneCallState, seconds: Long, onMute: () -> Unit
                 )
             }
         }
+        // Mute shows in either kind of call, so the two buttons sit at either end then.
+        val canMute = voice.phase != VoicePhase.Off && voice.phase != VoicePhase.Connecting
         Row(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 48.dp, end = 48.dp, bottom = 72.dp),
-            horizontalArrangement = if (voice.live) Arrangement.SpaceBetween else Arrangement.Center,
+            horizontalArrangement = if (canMute) Arrangement.SpaceBetween else Arrangement.Center,
         ) {
-            if (voice.live) {
+            // Mute in either kind of call: the microphone goes off the same way.
+            if (canMute) {
                 CallButton(
                     if (voice.muted) "Unmute" else "Mute",
                     if (voice.muted) Lucide.MicOff else Lucide.Mic,

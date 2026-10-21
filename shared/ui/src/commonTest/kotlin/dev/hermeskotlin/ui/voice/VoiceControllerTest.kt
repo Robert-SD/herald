@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import dev.hermeskotlin.core.settings.DictationEngine
 import dev.hermeskotlin.core.voice.AudioApi
+import dev.hermeskotlin.core.voice.BargeIn
 import dev.hermeskotlin.core.voice.DeviceDictation
 import dev.hermeskotlin.core.voice.DeviceDictationUnavailable
 import dev.hermeskotlin.core.voice.Recording
@@ -29,6 +30,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -582,5 +584,173 @@ class VoiceControllerTest {
         player.started.receive()
         voice.onBackground()
         assertNull(voice.reading.value.key)
+    }
+
+    /**
+     * A recorder that holds its recording open, the way a microphone listening in a quiet room does, so a mute
+     * can land over it. A mute lets go of the microphone and keeps nothing, as the real one does.
+     */
+    private class MutableRecorder : VoiceRecorder {
+        var recordings = 0
+        /** Whether the microphone is off as far as the recorder knows. */
+        var micOff = false
+        /** The mute states the recorder was told, in order. */
+        val mutes = mutableListOf<Boolean>()
+        /** How many recordings have been started, so a test can wait for the microphone to be listening. */
+        val listening = MutableStateFlow(0)
+        /** The recording in progress, let go when the microphone is turned off or the recording is finished. */
+        private var held: CompletableDeferred<Unit>? = null
+
+        override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording {
+            recordings++
+            listening.value = recordings
+            onLevel(0.5f)
+            onSpeech()
+            val done = CompletableDeferred<Unit>()
+            held = done
+            // The microphone went off over the recording: it keeps nothing.
+            if (micOff) return Recording(ByteArray(0), "audio/wav", heardSpeech = false)
+            done.await()
+            return if (micOff) Recording(ByteArray(0), "audio/wav", heardSpeech = false)
+            else Recording(byteArrayOf(1, 2, 3), "audio/wav", heardSpeech = true)
+        }
+
+        override fun finish() {
+            held?.complete(Unit)
+        }
+
+        override fun setMuted(muted: Boolean) {
+            micOff = muted
+            mutes += muted
+            // The microphone is off: the recording lets go of it.
+            if (muted) held?.complete(Unit)
+        }
+    }
+
+    @Test
+    fun mutingTheChainedChatTurnsTheMicrophoneOff() = runTest {
+        val recorder = MutableRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.toggleMute()
+
+        assertTrue(voice.chat.value.muted)
+        assertTrue(recorder.micOff)
+    }
+
+    @Test
+    fun unmutingTurnsTheMicrophoneBackOn() = runTest {
+        val recorder = MutableRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.toggleMute()
+        voice.toggleMute()
+
+        assertTrue(!voice.chat.value.muted)
+        assertTrue(!recorder.micOff)
+        assertEquals(listOf(true, false), recorder.mutes)
+    }
+
+    /** A muted microphone hears nothing, so the chat waits for it to come back rather than asking again. */
+    @Test
+    fun aMutedChatListensNothingUntilTheMicrophoneComesBack() = runTest {
+        val recorder = MutableRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.startChat(offlineSession(), gateway, null)
+        // The microphone is listening, with the chat waiting on it.
+        recorder.listening.first { it >= 1 }
+        voice.toggleMute()
+
+        // The listen that was under way is over; no new one starts while the microphone is off.
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, recorder.recordings)
+
+        voice.toggleMute()
+        // Now it listens again.
+        recorder.listening.first { it >= 2 }
+        assertEquals(2, recorder.recordings)
+        voice.stopChat()
+    }
+
+    /** A mute left over from the last chat doesn't carry into the next one. */
+    @Test
+    fun aNewChatStartsWithTheMicrophoneOn() = runTest {
+        val recorder = MutableRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.toggleMute()
+        voice.startChat(offlineSession(), gateway, null)
+
+        assertTrue(!voice.chat.value.muted)
+        assertTrue(!recorder.micOff)
+        voice.stopChat()
+    }
+
+    @Test
+    fun theMutedChatSaysItIsMuted() {
+        assertEquals("Muted", label(VoiceChatState(VoicePhase.Listening, muted = true)))
+        assertEquals("Tap the microphone to talk again", hint(VoiceChatState(VoicePhase.Listening, muted = true)))
+    }
+
+    /**
+     * A recorder that lets someone cut in over the reply, so a mute can land over that listen too.
+     */
+    private class CuttingInRecorder : VoiceRecorder {
+        var recordings = 0
+        /** How many times the microphone listened over the reply. */
+        var listens = 0
+        /** The cut-in listen in progress, let go when the microphone is turned off. */
+        private var held: CompletableDeferred<Unit>? = null
+        /** Whether the microphone is off as far as the recorder knows. */
+        var micOff = false
+
+        override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording {
+            recordings++
+            onSpeech()
+            return Recording(byteArrayOf(1, 2, 3), "audio/wav", heardSpeech = true)
+        }
+
+        override fun finish() = Unit
+
+        override suspend fun listenOver(
+            bargeIn: BargeIn,
+            playing: () -> Boolean,
+            onTrip: () -> Unit,
+            onLevel: (Float) -> Unit,
+            onListening: () -> Unit,
+        ): Recording? {
+            listens++
+            onListening()
+            val done = CompletableDeferred<Unit>()
+            held = done
+            // Muted: the microphone is off, so nobody can cut in and nothing is heard.
+            if (micOff) return null
+            done.await()
+            return if (micOff) null else Recording(byteArrayOf(4, 5, 6), "audio/wav", heardSpeech = true)
+        }
+
+        override fun setMuted(muted: Boolean) {
+            micOff = muted
+            if (muted) held?.complete(Unit)
+        }
+    }
+
+    /** Muting while the reply is sounding lets go of the microphone, and the cut-in that was heard is dropped. */
+    @Test
+    fun aMuteDuringTheReplyLetsGoOfTheMicrophoneAndKeepsNothing() = runTest {
+        val recorder = CuttingInRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.startChat(offlineSession(), gateway, null)
+        // The reply is sounding and the microphone is listening over it.
+        testScheduler.runCurrent()
+        voice.toggleMute()
+
+        assertTrue(voice.chat.value.muted)
+        assertTrue(recorder.micOff)
+        // Nothing of what was said over the reply is kept.
+        assertTrue(voice.chat.value.caption == null || !voice.chat.value.caption!!.contains("4, 5, 6"))
+        voice.stopChat()
     }
 }

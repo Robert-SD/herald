@@ -114,7 +114,7 @@ import kotlin.math.sqrt
 
 /**
  * A voice chat over the whole screen: the chat's name on top, what was said last as large captions, an orb
- * that moves with your voice or the reply, what's happening, and Mute (or Skip), End and Type round the
+ * that moves with your voice or the reply, what's happening, and Mute, End and Type round the
  * bottom. The chevron (or Back) folds it to the panel above the chat; Type ends the call for the keyboard.
  */
 @Composable
@@ -195,9 +195,17 @@ internal fun VoiceScreen(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Mute in either kind of voice chat: the microphone goes off the same way.
+                    if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
+                        SideButton(
+                            Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff,
+                            if (state.muted) "Unmute" else "Mute",
+                            onMute,
+                            on = state.muted,
+                            toggle = true,
+                        )
+                    }
                     when {
-                        state.live && state.phase != VoicePhase.Connecting ->
-                            SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, "Mute", onMute, on = state.muted, toggle = true)
                         !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
                         canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
                         // An empty slot keeps End in the middle.

@@ -86,9 +86,9 @@ import kotlin.math.sqrt
 /**
  * Takes the composer's place during a voice chat, the chat staying in view above it: an orb that swells with
  * your voice and ripples while the voice talks, what's happening, the words just said as captions, the tool
- * Hermes is running, and round buttons. A GPT-Live call has Mute (you talk over the voice to cut in); the
- * chained chat has Skip while it reads a reply, and Send now while it hears you. What you say sends itself
- * after a pause; saying "stop" ends it.
+ * Hermes is running, and round buttons. Both kinds of voice chat have Mute, which turns the microphone off; a
+ * GPT-Live call also lets you talk over the voice to cut in. The chained chat has Skip while it reads a reply,
+ * and Send now while it hears you. What you say sends itself after a pause; saying "stop" ends it.
  */
 @Composable
 internal fun VoicePanel(
@@ -152,17 +152,20 @@ internal fun VoicePanel(
         }
         Row(
             Modifier.padding(top = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(40.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            when {
-                state.live && state.phase != VoicePhase.Connecting -> RoundButton(
+            // Mute in either kind of voice chat: the microphone goes off the same way.
+            if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
+                RoundButton(
                     if (state.muted) Lucide.MicOff else Lucide.Mic,
                     contentDescription = if (state.muted) "Unmute" else "Mute",
                     fill = if (state.muted) Theme[colors][textColor] else Theme[colors][textColor].copy(alpha = 0.08f),
                     tint = if (state.muted) Theme[colors][background] else Theme[colors][textColor],
                     onClick = onMute,
                 )
+            }
+            when {
                 !state.live && state.phase == VoicePhase.Speaking -> RoundButton(
                     Lucide.SkipForward,
                     contentDescription = "Skip the reply",
@@ -185,6 +188,7 @@ internal fun VoicePanel(
 
 internal fun label(state: VoiceChatState) = when (state.phase) {
     VoicePhase.Connecting -> "Connecting…"
+    // Muted reads the same in either kind of voice chat: the microphone is off.
     VoicePhase.Listening -> if (state.muted) "Muted" else if (state.hearing) "Hearing you…" else "Listening…"
     VoicePhase.Transcribing -> "Catching that…"
     VoicePhase.Thinking -> "Thinking…"
@@ -193,10 +197,11 @@ internal fun label(state: VoiceChatState) = when (state.phase) {
 }
 
 /** The chained chat has heard you: what's said so far can go now, without waiting for the pause. */
-internal fun canSendNow(state: VoiceChatState) = !state.live && state.phase == VoicePhase.Listening && state.hearing
+internal fun canSendNow(state: VoiceChatState) = !state.live && !state.muted && state.phase == VoicePhase.Listening && state.hearing
 
 /** What to do now, while there are no words to show. */
 internal fun hint(state: VoiceChatState) = when {
+    // The microphone is off: nothing is heard until it's turned on again.
     state.muted -> "Tap the microphone to talk again"
     state.phase == VoicePhase.Connecting -> "Setting up the call"
     state.phase == VoicePhase.Thinking -> "Hermes is on it"
