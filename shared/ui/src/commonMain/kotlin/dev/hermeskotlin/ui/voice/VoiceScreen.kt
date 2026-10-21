@@ -35,7 +35,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -195,7 +194,14 @@ internal fun VoiceScreen(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // Mute in either kind of voice chat: the microphone goes off the same way.
+                    // What's context-specific goes first; End and Mute follow, together.
+                    when {
+                        !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
+                        canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
+                    }
+                    EndButton(onEnd)
+                    // Mute in either kind of voice chat: the microphone goes off the same way. It sits beside End,
+                    // so the two ways of changing the call are together.
                     if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
                         SideButton(
                             Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff,
@@ -205,13 +211,6 @@ internal fun VoiceScreen(
                             toggle = true,
                         )
                     }
-                    when {
-                        !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
-                        canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
-                        // An empty slot keeps End in the middle.
-                        else -> Spacer(Modifier.size(52.dp))
-                    }
-                    EndButton(onEnd)
                     SideButton(Lucide.Keyboard, "Type instead", onType)
                 }
             }

@@ -155,16 +155,6 @@ internal fun VoicePanel(
             horizontalArrangement = Arrangement.spacedBy(24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Mute in either kind of voice chat: the microphone goes off the same way.
-            if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
-                RoundButton(
-                    if (state.muted) Lucide.MicOff else Lucide.Mic,
-                    contentDescription = if (state.muted) "Unmute" else "Mute",
-                    fill = if (state.muted) Theme[colors][textColor] else Theme[colors][textColor].copy(alpha = 0.08f),
-                    tint = if (state.muted) Theme[colors][background] else Theme[colors][textColor],
-                    onClick = onMute,
-                )
-            }
             when {
                 !state.live && state.phase == VoicePhase.Speaking -> RoundButton(
                     Lucide.SkipForward,
@@ -182,6 +172,17 @@ internal fun VoicePanel(
                 )
             }
             RoundButton(Lucide.PhoneOff, contentDescription = "End voice chat", fill = Theme[colors][danger], tint = Color.White, onClick = onEnd)
+            // Mute in either kind of voice chat: the microphone goes off the same way. It sits beside End, so the
+            // two ways of changing the call are together.
+            if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
+                RoundButton(
+                    if (state.muted) Lucide.MicOff else Lucide.Mic,
+                    contentDescription = if (state.muted) "Unmute" else "Mute",
+                    fill = if (state.muted) Theme[colors][textColor] else Theme[colors][textColor].copy(alpha = 0.08f),
+                    tint = if (state.muted) Theme[colors][background] else Theme[colors][textColor],
+                    onClick = onMute,
+                )
+            }
         }
     }
 }
