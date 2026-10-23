@@ -14,9 +14,9 @@ fun interface NarrationSpeaker {
 }
 
 /**
- * What Hermes is at, as the narrator has it: the tool it's running (and what for), or the gateway's own status
- * line. Two of these are one activity when every part of them is, which is how a line already said is told
- * from news.
+ * What Hermes is at, as the narrator has it: the tool it's running (and what for), a status update,
+ * thinking/ruminating, or wrapping up. Two of these are one activity when every part of them is,
+ * which is how a line already said is told from news.
  */
 data class NarrationActivity(
     val tool: String? = null,
@@ -24,12 +24,22 @@ data class NarrationActivity(
     val detail: String? = null,
     /** The turn's latest `status.update` line. */
     val status: String? = null,
+    /** When the bot is thinking or ruminating before or between actions. */
+    val thinking: String? = null,
+    /** When tools have run in this turn and finished, and the agent is preparing the final reply. */
+    val wrappingUp: Boolean = false,
 ) {
-    /** Nothing to go on yet: no tool started and nothing said about what the agent is at. */
-    val quiet: Boolean get() = tool == null && status == null
+    /** Nothing to go on yet: no tool started, no status, and not running. */
+    val quiet: Boolean get() = tool == null && status == null && thinking == null && !wrappingUp
 
-    /** What makes two of these the same activity. */
-    val key: String get() = "${tool.orEmpty()}\u0000${detail.orEmpty()}\u0000${status.orEmpty()}"
+    /** What makes two of these the same thought activity. */
+    val key: String get() = when {
+        wrappingUp -> "wrapping_up"
+        tool != null -> "tool:$tool:${detail.orEmpty()}"
+        status != null -> "status:$status"
+        thinking != null -> "thinking:${thinkingCategory(thinking)}"
+        else -> ""
+    }
 }
 
 /**
@@ -41,96 +51,85 @@ fun monotonicMs(): Long = MONOTONIC_ORIGIN.elapsedNow().inWholeMilliseconds
 private val MONOTONIC_ORIGIN = TimeSource.Monotonic.markNow()
 
 /**
- * When to say what while a turn runs, and what to say: the phone's answer to a long silence while Hermes works.
+ * Thought-driven progress narration: announces what Hermes is doing whenever its thoughts change (thinking,
+ * running commands, wrapping up), throttled so rapid transient thoughts (faster than [minGapMs]) are skipped.
  *
- * A line comes about every [fastMs] at first, so the start of a turn is never quiet, and backs off to about
- * every [slowMs] once nothing new arrives; a tool or a status that comes in counts as news and brings the fast
- * cadence back. It goes on for as long as the turn does, rather than for a few lines, since the wait it covers
- * can run into minutes. What it says is always the latest activity, and never the same words twice in a row.
- *
- * The clock is given to it, so a test drives the cadence without waiting. What the loop does with the line is
- * the caller's business: the chained chat speaks it, a live call hands it to the vendor's voice.
+ * It stays peaceful while a long thought continues without repetitive clock ticking, and speaks the moment
+ * the bot enters a new thought phase.
  */
 class Narration(
-    private val clock: () -> Long,
-    private val fastMs: Long = FAST_MS,
-    private val slowMs: Long = SLOW_MS,
+    private val clock: () -> Long = { monotonicMs() },
+    val minGapMs: Long = MIN_GAP_MS,
 ) {
-    /** When the loop may ask again; null until it has asked once, which is a fast interval off. */
-    private var dueAt: Long? = null
-    /** The last line said, and the activity it came from, so the same again isn't said twice. */
-    private var said: String? = null
-    private var saidKey: String? = null
-    private var saidAt = 0L
-    /** The activity the loop was last given, to tell one just arrived from one still running. */
-    private var seenKey: String? = null
+    /** The key of the activity currently being tracked, and when it started. */
+    private var currentKey: String? = null
+    private var currentStartedAt: Long = 0L
 
-    /** How long the loop waits before it asks for a line again. */
-    fun waitMs(): Long {
+    /** The key of the activity that was last spoken. */
+    var saidKey: String? = null
+        private set
+    /** The last line said. */
+    private var said: String? = null
+
+    private fun track(activity: NarrationActivity): Long? {
+        if (activity.quiet) {
+            currentKey = null
+            return null
+        }
+        val key = activity.key
+        if (key.isEmpty() || key == saidKey) return null
         val now = clock()
-        val due = dueAt ?: (now + fastMs).also { dueAt = it }
-        // Never longer than the fast cadence, however far off the next line is: a tool starting meanwhile is news,
-        // and is only noticed when the loop looks. Looking says nothing.
-        return (due - now).coerceIn(0L, fastMs)
+        if (key != currentKey) {
+            currentKey = key
+            currentStartedAt = now
+        }
+        return (currentStartedAt + minGapMs - now).coerceAtLeast(0L)
     }
 
     /**
-     * The line for [activity] now, or null when this isn't the moment for one: news that was just said, or
-     * nothing new before the slow interval is up. Called with the same activity again and again, it keeps
-     * saying that the agent is still at it, at the slow cadence, however long the job runs.
+     * How long until the current thought qualifies to be spoken (has persisted for [minGapMs]),
+     * or null if there is no pending thought or the current thought was already spoken.
+     */
+    fun waitMs(activity: NarrationActivity): Long? = track(activity)
+
+    /**
+     * Returns the line for [activity] if it represents an active thought that has persisted for at
+     * least [minGapMs], skipping thoughts that change faster than [minGapMs].
      */
     fun line(activity: NarrationActivity): String? {
-        val now = clock()
-        val key = activity.key
-        // News is worth a word soon, not on the slow cadence a long job has settled into; but not over the heels of
-        // the last line, which would sound like a stutter.
-        if (key != seenKey) {
-            seenKey = key
-            dueAt = maxOf(now, saidAt + fastMs)
-        }
-        val due = dueAt ?: return null
-        if (now < due) return null
-        val news = key != saidKey && !activity.quiet
-        if (!news && now - saidAt < slowMs) {
-            dueAt = saidAt + slowMs
-            return null
-        }
-        val base = narrationLine(activity, still = !news)
-        val line = base?.takeUnless { it == said }
-            ?: base?.let { narrationLine(activity, still = !news, other = true) }
-        if (line == null) {
-            // Nothing worth saying (no tool or status yet, or the same words as the last time). A job running on
-            // is asked again at the slow cadence, so it's never the last thing said.
-            dueAt = if (news) now + fastMs else maxOf(now + fastMs, saidAt + slowMs)
-            if (news) saidKey = key
-            return null
-        }
+        val remaining = track(activity) ?: return null
+        if (remaining > 0L) return null
+        val base = narrationLine(activity) ?: return null
+        val line = if (base == said) narrationLine(activity, other = true) ?: base else base
         said = line
-        saidKey = key
-        saidAt = now
-        dueAt = now + slowMs
+        saidKey = activity.key
         return line
     }
 
-    private companion object {
-        /** The cadence at the start of a turn: often enough that the first silence is short. */
-        const val FAST_MS = 5_000L
-        /** What a long job settles into, so a wait of minutes isn't a voice in the ear. */
-        const val SLOW_MS = 17_000L
+    companion object {
+        /** Minimum delay before a thought transition is announced; faster thoughts are skipped. */
+        const val MIN_GAP_MS = 3_000L
     }
 }
 
 /**
- * What the turn running in [chat] is at, its reply starting at message [from]: the tool it has running now,
- * else the gateway's status line. The tool comes first because it's the concrete thing; the status is what
- * the agent has to say about itself when no tool is running.
+ * What the turn running in [chat] is at, its reply starting at message [from]:
+ * 1. Running tool (e.g. terminal, web search).
+ * 2. Wrapping up (tools have completed and the final reply is being generated).
+ * 3. Gateway status update line.
+ * 4. Thinking/ruminating before or between actions.
  */
 fun narrationActivity(chat: ChatState, from: Int): NarrationActivity {
-    val running = chat.messages.drop(from).filterIsInstance<ChatMessage.Assistant>()
-        .flatMap { it.tools }
-        .lastOrNull { it.running }
-    if (running != null) return NarrationActivity(tool = running.name, detail = detailOf(running))
-    return NarrationActivity(status = chat.status?.takeIf { it.isNotBlank() })
+    if (!chat.running) return NarrationActivity()
+
+    val assistantMessages = chat.messages.drop(from).filterIsInstance<ChatMessage.Assistant>()
+    val allTools = assistantMessages.flatMap { it.tools }
+    val runningTool = allTools.lastOrNull { it.running }
+    if (runningTool != null) return NarrationActivity(tool = runningTool.name, detail = detailOf(runningTool))
+    if (allTools.isNotEmpty() && allTools.none { it.running }) return NarrationActivity(wrappingUp = true)
+    if (chat.status?.isNotBlank() == true) return NarrationActivity(status = chat.status)
+    val thinking = chat.thinkingFrame?.takeIf { it.isNotBlank() } ?: "thinking"
+    return NarrationActivity(thinking = thinking)
 }
 
 /**
@@ -143,22 +142,54 @@ private fun detailOf(tool: ToolActivity): String? =
 
 /**
  * A line for [activity] the way the voice chat says things: a sentence about what Hermes is at, not a label.
- * [still] is the one that stands in for a line already said, so a job running on isn't the same words again;
- * [other] is the plainest thing there is to say, for when that line is the one just heard. Null when there's
- * nothing to go on: an activity with no tool and no status has nothing to say.
+ * [other] is the alternative line to avoid repeating the exact same words in a row.
  */
-fun narrationLine(activity: NarrationActivity, still: Boolean = false, other: Boolean = false): String? {
-    val subject = subject(activity.detail)
-    // The same words twice in a row say nothing the first didn't, so there is always a plainer line to fall back on.
-    if (other) return if (still) "Still working on it." else "Working on it now."
+fun narrationLine(activity: NarrationActivity, other: Boolean = false): String? {
+    if (activity.wrappingUp) return if (other) "Finishing up now." else "Wrapping up now."
+    if (other) return "Working on it now."
     activity.tool?.let { tool ->
+        val subject = subject(activity.detail)
         val doing = doing(tool, subject)
-        if (still) return "Still ${doing.gerund}."
         val tail = if (doing.tail.isEmpty()) "" else " ${doing.tail}"
         return "${doing.gerund.replaceFirstChar { it.uppercase() }}$tail."
     }
-    val status = activity.status?.let(::spokenStatus) ?: return null
-    return if (still) "Still ${status.replaceFirstChar { it.lowercase() }}" else status
+    activity.status?.let { status ->
+        return spokenStatus(status)
+    }
+    activity.thinking?.let { thinking ->
+        return spokenThinking(thinking)
+    }
+    return null
+}
+
+/** Translates thinking/ruminating frames into plain spoken words. */
+private fun spokenThinking(thinking: String): String {
+    val cleaned = thinking.replace(Regex("""\([^)]*\)"""), " ")
+        .replace(Regex("""[^\w\s]"""), " ")
+        .trim()
+        .lowercase()
+    return when {
+        "ruminat" in cleaned -> "Ruminating now."
+        "musing" in cleaned -> "Musing now."
+        "formulat" in cleaned -> "Formulating now."
+        "prepar" in cleaned -> "Preparing now."
+        else -> "Thinking now."
+    }
+}
+
+/** Category key for thinking frames so animated spinner variations don't re-trigger speech. */
+private fun thinkingCategory(thinking: String): String {
+    val cleaned = thinking.replace(Regex("""\([^)]*\)"""), " ")
+        .replace(Regex("""[^\w\s]"""), " ")
+        .trim()
+        .lowercase()
+    return when {
+        "ruminat" in cleaned -> "ruminating"
+        "musing" in cleaned -> "musing"
+        "formulat" in cleaned -> "formulating"
+        "prepar" in cleaned -> "preparing"
+        else -> "thinking"
+    }
 }
 
 /** A tool as it sounds while it runs: [gerund] after "Still", and the words that close the line when it's news. */
