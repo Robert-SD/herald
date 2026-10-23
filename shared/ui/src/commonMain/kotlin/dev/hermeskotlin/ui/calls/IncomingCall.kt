@@ -195,11 +195,13 @@ internal fun InCallView(state: PhoneCallState, seconds: Long, onMute: () -> Unit
                 )
             }
         }
+        val canMute = !state.ended && voice.phase != VoicePhase.Off
         Row(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 48.dp, end = 48.dp, bottom = 72.dp),
-            horizontalArrangement = if (voice.live) Arrangement.SpaceBetween else Arrangement.Center,
+            horizontalArrangement = if (canMute) Arrangement.SpaceBetween else Arrangement.Center,
         ) {
-            if (voice.live) {
+            CallButton("End", Lucide.PhoneOff, Theme[colors][danger], onEnd)
+            if (canMute) {
                 CallButton(
                     if (voice.muted) "Unmute" else "Mute",
                     if (voice.muted) Lucide.MicOff else Lucide.Mic,
@@ -207,7 +209,6 @@ internal fun InCallView(state: PhoneCallState, seconds: Long, onMute: () -> Unit
                     onMute,
                 )
             }
-            CallButton("End", Lucide.PhoneOff, Theme[colors][danger], onEnd)
         }
     }
 }

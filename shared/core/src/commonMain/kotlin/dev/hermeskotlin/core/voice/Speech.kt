@@ -121,6 +121,12 @@ interface VoiceRecorder {
     fun finish()
 
     /**
+     * Turns the microphone off or on. While it's off a recording doesn't start, and one in progress lets go of the
+     * microphone and keeps nothing: a muted microphone hears nothing. Off is off until it's turned on again.
+     */
+    fun setMuted(muted: Boolean) {}
+
+    /**
      * Listens while the agent works and speaks, for someone talking over it ([bargeIn] decides), with the echo
      * cancelling a call uses. [playing] says whether the voice is sounding right now; [onTrip] fires the moment
      * someone cuts in, and [onLevel] gets the input level from then on. [onListening] fires once the microphone is
