@@ -11,6 +11,7 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.NoiseSuppressor
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
@@ -38,6 +39,14 @@ import kotlin.math.sqrt
 class AndroidVoiceRecorder : VoiceRecorder {
 
     @Volatile private var finishRequested = false
+
+    /**
+     * What the phone gave the last barge-in microphone it opened: whether echo cancelling and noise suppression
+     * were offered and switched on. Null until one has listened. Best-effort by nature, so this is the only way
+     * to know whether a cut-in was really competing with the voice or with its echo.
+     */
+    @Volatile var lastEffects: VoiceEffects? = null
+        private set
 
     @SuppressLint("MissingPermission") // The UI asks for RECORD_AUDIO before starting.
     override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording = withContext(Dispatchers.IO) {
@@ -140,9 +149,28 @@ class AndroidVoiceRecorder : VoiceRecorder {
             var tripped = false
             try {
                 // Inside the try, so the recorder is let go whatever they do; one that won't switch on is done without.
-                if (AcousticEchoCanceler.isAvailable()) runCatching { AcousticEchoCanceler.create(record.audioSessionId) }.getOrNull()?.let(effects::add)
-                if (NoiseSuppressor.isAvailable()) runCatching { NoiseSuppressor.create(record.audioSessionId) }.getOrNull()?.let(effects::add)
+                val echoOffered = AcousticEchoCanceler.isAvailable()
+                val echo = if (echoOffered) {
+                    runCatching { AcousticEchoCanceler.create(record.audioSessionId) }.getOrNull()
+                } else {
+                    null
+                }
+                echo?.let(effects::add)
+                val suppressOffered = NoiseSuppressor.isAvailable()
+                val suppress = if (suppressOffered) {
+                    runCatching { NoiseSuppressor.create(record.audioSessionId) }.getOrNull()
+                } else {
+                    null
+                }
+                suppress?.let(effects::add)
                 effects.forEach { runCatching { it.enabled = true } }
+                lastEffects = VoiceEffects(
+                    echoCancelAvailable = echoOffered,
+                    echoCancelEnabled = echo?.enabled == true,
+                    noiseSuppressAvailable = suppressOffered,
+                    noiseSuppressEnabled = suppress?.enabled == true,
+                )
+                if (Log.isLoggable(EFFECTS_TAG, Log.DEBUG)) Log.d(EFFECTS_TAG, "barge-in microphone: $lastEffects")
                 record.startRecording()
                 if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) return@withContext null
                 onListening()
@@ -211,6 +239,8 @@ class AndroidVoiceRecorder : VoiceRecorder {
     }
 
     private companion object {
+        /** logcat tag for what the phone gave the microphone: `adb shell setprop log.tag.${EFFECTS_TAG} DEBUG`. */
+        const val EFFECTS_TAG = "HeraldVoice"
         const val SAMPLE_RATE = 16_000
 
         /** 20 ms frames: fine-grained enough for the silence timer. */
