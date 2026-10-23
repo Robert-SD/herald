@@ -63,6 +63,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
         val frame = ShortArray(FRAME_SAMPLES)
         val bytes = ByteBuffer.allocate(FRAME_SAMPLES * 2).order(ByteOrder.LITTLE_ENDIAN)
         val endOfSpeech = EndOfSpeech(activity)
+        val features = VoiceFrameFeatures(SAMPLE_RATE)
         var elapsed = 0L
         try {
             record.startRecording()
@@ -82,7 +83,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 val level = min(1.0, sqrt(sum / read) / 256.0 / 42.0).toFloat()
                 onLevel(level)
                 val heardBefore = endOfSpeech.heardSpeech
-                val done = endOfSpeech.onFrame(level, elapsed)
+                val done = endOfSpeech.onFrame(features.of(frame, read, level), elapsed)
                 if (endOfSpeech.heardSpeech && !heardBefore) onSpeech()
                 if (done) break
             }

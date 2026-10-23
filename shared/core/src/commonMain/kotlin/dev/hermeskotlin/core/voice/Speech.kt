@@ -21,12 +21,30 @@ data class VoiceActivity(
     val idleMs: Long = 12_000,
     /** Hard cap on one recording. */
     val maxMs: Long = 60_000,
+    /**
+     * How long a voice must hold before anyone is taken to be talking. A clatter, a door, or one syllable out of
+     * a film's soundtrack is over sooner; needing a word keeps them from starting a turn.
+     */
+    val confirmMs: Long = 300,
+    /** How far back the room is measured. Longer is steadier, and slower to notice it has changed. */
+    val noiseWindowMs: Long = 3_000,
+    /** Which part of that window stands for the room: the quiet fifth of it, so a lorry outside is ignored. */
+    val noisePercentile: Float = 0.2f,
+    /** The flattest spectrum a voice may have; a hiss or a cymbal spreads flatter than any voice does. */
+    val flatnessMax: Float = 0.55f,
+    /** The least of a frame's energy that may sit in 300–3400 Hz, where a voice carries its own. */
+    val speechBandMin: Float = 0.35f,
 )
 
 /**
  * Decides, frame by frame, when someone has finished talking. Desktop's fixed level assumes a quiet
  * room; a phone is often somewhere noisier, so the bar also rises with the measured background
  * noise: speech must stand clearly above it, and quiet is anything back near it.
+ *
+ * Three things keep a room out of a turn. The room is the quiet fifth of the last few seconds rather
+ * than a running average, so a film that is loud from its first second cannot pass for its own
+ * silence. A voice has to hold for [VoiceActivity.confirmMs] before it counts as someone talking.
+ * And where the caller measures a spectrum, the frame must look like a voice rather than hiss or bass.
  */
 class EndOfSpeech(private val activity: VoiceActivity) {
     var heardSpeech = false
@@ -38,34 +56,48 @@ class EndOfSpeech(private val activity: VoiceActivity) {
     private var silenceSince = -1L
     /** Since when the level has stood above quiet, in a pause after speech; -1 when it hasn't. */
     private var loudSince = -1L
+    /** Since when a voice has held, before anyone is taken to be talking; -1 when it hasn't. */
+    private var runStart = -1L
+    /** Where the last frame that looked like a voice ended, which [runStart] is measured to. */
+    private var lastVoiceEnd = -1L
     /** Where the last frame ended, which is where this one starts. */
     private var lastFrameEnd = 0L
+    private val quietTimes = ArrayDeque<Long>()
+    private val quietLevels = ArrayDeque<Float>()
 
     /** Feeds one frame's [level] at [elapsedMs] into the recording; true once the recording should end. */
-    fun onFrame(level: Float, elapsedMs: Long): Boolean {
+    fun onFrame(level: Float, elapsedMs: Long): Boolean = onFrame(VoiceFrame(level), elapsedMs)
+
+    /**
+     * Feeds one frame at [elapsedMs] into the recording; true once it should end. A [frame] carrying spectral
+     * features is held to them, so a soundtrack's music and effects don't pass for the person talking.
+     */
+    fun onFrame(frame: VoiceFrame, elapsedMs: Long): Boolean {
         val frameStart = lastFrameEnd
         lastFrameEnd = elapsedMs
-        // The opening moment only measures the room; nobody starts talking that fast.
-        if (elapsedMs <= CALIBRATION_MS) {
-            noise = if (noise < 0) level else noise + (level - noise) * 0.2f
+        // The opening frame measures the room; nobody starts talking that fast, and a film already loud at the
+        // first second is room too, not the person.
+        if (noise < 0) {
+            remember(frame.level, elapsedMs)
+            noise = percentile()
             return false
         }
-        val speechBar = maxOf(activity.speechLevel, noise * SPEECH_OVER_NOISE)
+        // Only what doesn't look like a voice teaches the detector what the room sounds like: a long sentence
+        // would otherwise drag the bar up over the speaker's own head.
+        val speech = frame.level >= maxOf(activity.speechLevel, noise * SPEECH_OVER_NOISE) && voiceLike(frame)
+        if (!speech) remember(frame.level, elapsedMs)
+        val measured = percentile()
+        if (measured >= 0) noise = measured
         val quietBar = maxOf(activity.speechLevel * QUIET_FRACTION, noise * QUIET_OVER_NOISE)
-        val speech = level >= speechBar
         if (speech) {
-            heardSpeech = true
-            // A steady loud room lifts the bar too, slowly enough that a long sentence doesn't.
-            noise += (level - noise) * 0.002f
-        } else {
-            // The background noise follows the quiet frames: down quickly, up slowly.
-            noise = when {
-                noise < 0 -> level
-                level < noise -> noise + (level - noise) * 0.3f
-                else -> noise + (level - noise) * 0.02f
-            }
+            if (runStart < 0) runStart = frameStart
+            lastVoiceEnd = elapsedMs
+            if (!heardSpeech && lastVoiceEnd - runStart >= activity.confirmMs) heardSpeech = true
+        } else if (runStart >= 0 && elapsedMs - lastVoiceEnd > SPEECH_GAP_MS) {
+            // A gap inside a word is nothing; a gap this long means the voice stopped.
+            runStart = -1
         }
-        if (heardSpeech && level < quietBar) {
+        if (heardSpeech && frame.level < quietBar) {
             loudSince = -1
             if (silenceSince < 0) silenceSince = elapsedMs
             if (elapsedMs - silenceSince >= activity.silenceMs) return true
@@ -81,15 +113,43 @@ class EndOfSpeech(private val activity: VoiceActivity) {
         return elapsedMs >= activity.maxMs
     }
 
+    /** True when [frame] has the shape of a voice; a frame with no spectrum is taken on its level alone. */
+    private fun voiceLike(frame: VoiceFrame): Boolean {
+        val band = frame.speechBand
+        if (band != null && band < activity.speechBandMin) return false
+        val flat = frame.flatness
+        if (flat != null && flat > activity.flatnessMax) return false
+        return true
+    }
+
+    /** Keeps the room's recent frames, the ones no voice was in, and lets the old ones fall out of the window. */
+    private fun remember(level: Float, elapsedMs: Long) {
+        quietTimes.addLast(elapsedMs)
+        quietLevels.addLast(level)
+        while (quietTimes.isNotEmpty() && elapsedMs - quietTimes.first() > activity.noiseWindowMs) {
+            quietTimes.removeFirst()
+            quietLevels.removeFirst()
+        }
+    }
+
+    /** The quiet fifth of the window: the level the room sits at, -1 while nothing is in it. */
+    private fun percentile(): Float {
+        if (quietLevels.isEmpty()) return -1f
+        val sorted = quietLevels.toFloatArray().also { it.sort() }
+        val index = (sorted.size * activity.noisePercentile).toInt().coerceIn(0, sorted.size - 1)
+        return sorted[index]
+    }
+
     private companion object {
-        const val CALIBRATION_MS = 300L
         const val SPEECH_OVER_NOISE = 2.5f
         const val QUIET_OVER_NOISE = 1.6f
         const val QUIET_FRACTION = 0.8f
         /** How long the level has to stay at speech, in a pause, to count as talking again: a syllable's worth. */
         const val SPEECH_RUN_MS = 60L
-        /** The same for a level between quiet and speech, which noise reaches more often. */
+        /** The same for a level between quiet and speech, which noise reaches far more often. */
         const val MURMUR_RUN_MS = 200L
+        /** The longest gap inside one word: the closure before a "p" is shorter than this. */
+        const val SPEECH_GAP_MS = 240L
     }
 }
 
