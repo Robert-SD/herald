@@ -86,7 +86,7 @@ data class VoiceChatState(
     val error: String? = null,
     /** A GPT-Live call rather than Desktop's listen, send and read aloud. */
     val live: Boolean = false,
-    /** The microphone is off in a live call. */
+    /** The microphone is off: it hears nothing, and in a live call the voice model is told so too. */
     val muted: Boolean = false,
     /** The latest words said, as captions: yours, or the voice's when [captionIsVoice]. */
     val caption: String? = null,
@@ -184,8 +184,10 @@ class VoiceController(
     private var voiced = ""
     /** The chained chat's barge-in settings, read once per chat; null outside one. */
     private var bargeIn: Deferred<BargeInSettings>? = null
-    /** The microphone wouldn't listen over the voice in this chat; it isn't asked again. */
-    private var cantListenOver = false
+    /** This turn's listen over the voice wouldn't open the microphone; the next turn asks it again. */
+    private var micRefusedOver = false
+    /** The microphone is off in the chained chat: the listen waits for it to come back. */
+    private val muted = MutableStateFlow(false)
     /** What is saying that Hermes is still at it, while the turn runs; null when nothing is. */
     private var narrator: Job? = null
 
@@ -209,6 +211,8 @@ class VoiceController(
         stoppedByUser = false
         roomFloor = 0f
         noSpeechStream = null
+        muted.value = false
+        recorder.setMuted(false)
         // Held now, on the tap: Android only lets the microphone go to the background from the foreground.
         away = false
         held = keepAlive?.hold(
@@ -224,6 +228,8 @@ class VoiceController(
                 if (startLive(session, gateway, profile, opener)) return@launch
                 converseChained(session, gateway, profile, pauseMs, opener)
             } finally {
+                muted.value = false
+                recorder.setMuted(false)
                 // Also a chat ended before it found its mode (End during the status check). An ending the person
                 // chose needs no explanation; one forced by an error keeps it. A newer chat keeps its own.
                 if (chatJob == null || chatJob === coroutineContext.job) {
@@ -248,7 +254,6 @@ class VoiceController(
         // Read while the first listen goes on; it's needed once the first reply is on its way.
         val settings = async { audio.bargeIn(gateway, profile) }
         bargeIn = settings
-        cantListenOver = false
         var failures = 0
         var cutIn: String? = null
         try {
@@ -323,12 +328,17 @@ class VoiceController(
         return true
     }
 
-    /** Turns the microphone off or on in a live call. */
+    /**
+     * Turns the microphone off or on. In a live call the voice model is told, so it stops waiting on you; in the
+     * chained chat the microphone is closed and the chat waits for it to come back.
+     */
     fun toggleMute() {
-        val conversation = live ?: return
-        val muted = !_chat.value.muted
-        conversation.setMuted(muted)
-        _chat.update { it.copy(muted = muted) }
+        if (chatJob?.isActive != true) return
+        val nowMuted = !_chat.value.muted
+        _chat.update { it.copy(muted = nowMuted, level = 0f, hearing = false) }
+        muted.value = nowMuted
+        recorder.setMuted(nowMuted)
+        live?.setMuted(nowMuted)
     }
 
     fun stopChat() {
@@ -366,6 +376,9 @@ class VoiceController(
         activity: VoiceActivity,
         cutIn: String?,
     ): Turn {
+        // The microphone that wouldn't open last turn is asked again: a single failure costs its own turn, never
+        // the rest of the chat.
+        micRefusedOver = false
         try {
             // Hermes already waits on an answer (the chat opened from a call for one): that comes first, then the rest of
             // its turn, whose reply follows the last prompt.
@@ -466,7 +479,7 @@ class VoiceController(
                     false
                 }
                 tripped.onAwait { true }
-                // A microphone that couldn't listen over the voice won't on the next try either.
+                // The microphone wouldn't open over the voice: this turn is heard without barge-in.
                 over.onAwait { heard -> heard != null }
             }
             // Null when it was its own voice, or a knock: the voice went on where it held; listen again.
@@ -481,8 +494,10 @@ class VoiceController(
      */
     private suspend fun listenOver(activity: VoiceActivity, tripped: CompletableDeferred<Unit>): Recording? {
         val settings = bargeIn?.await() ?: return null
-        if (!settings.enabled || cantListenOver) return null
-        val detector = BargeIn(settings, activity.silenceMs, roomFloor)
+        if (!settings.enabled || micRefusedOver) return null
+        if (muted.value) return null
+        // What the user's own speech sounds like on this phone, so the bar stops where they can still clear it.
+        val detector = BargeIn(settings, activity.silenceMs, roomFloor, recorder.speechLevel)
         val heard = try {
             recorder.listenOver(
                 detector,
@@ -501,9 +516,9 @@ class VoiceController(
             // Not offered once the microphone is closed again, as while a question is asked aloud.
             _chat.update { it.copy(bargeIn = false) }
         }
-        // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it,
-        // this turn or the next.
-        if (heard == null) cantListenOver = true
+        // The microphone wouldn't listen over the voice: this reply goes on as without barge-in, and doesn't offer
+        // it. Only until the next turn, which asks again. A mute is asked again once the microphone comes back.
+        if (heard == null && !muted.value) micRefusedOver = true
         return heard
     }
 
@@ -654,6 +669,11 @@ class VoiceController(
 
     /** What's said next, as [Heard] tells. An error on show stays through silence, and goes once words come. */
     private suspend fun hear(gateway: GatewayUrl, profile: String?, activity: VoiceActivity): Heard {
+        // Muted: the microphone is off, so wait for it rather than ask for a recording that would hear nothing.
+        if (muted.value) {
+            _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
+            muted.first { !it }
+        }
         _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
         val recording = try {
             recorder.record(
@@ -1062,6 +1082,7 @@ class VoiceController(
         if (dictationJob?.isActive == true || chatJob?.isActive == true) return
         // The microphone would hear it.
         stopReading()
+        recorder.setMuted(false)
         _dictation.value = DictationState(recording = true)
         val device = deviceDictation?.takeIf { engine == DictationEngine.Device && it.available() }
         dictating = device

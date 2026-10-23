@@ -123,7 +123,12 @@ class LiveConversationTest {
 
         override fun speaking() = false
         override fun micLevel() = 0f
-        override fun setMuted(muted: Boolean) = Unit
+
+        /** The mute states the call was told, in order. */
+        val mutes = mutableListOf<Boolean>()
+        override fun setMuted(muted: Boolean) {
+            mutes += muted
+        }
 
         override fun close() {
             closed = true
@@ -189,6 +194,30 @@ class LiveConversationTest {
         assertTrue(said.contains("Build 42"), said)
         // Said by the voice, not a request: no Hermes turn starts.
         assertTrue(socket.submits.value.isEmpty())
+        voice.stopChat()
+    }
+
+    /** Muting a live call tells the voice model, so it stops waiting on you. */
+    @Test
+    fun mutingALiveCallTellsTheVoiceModel() = runTest {
+        val client = http("gpt-live", mutableListOf())
+        val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> error("not connecting") }, backgroundScope)
+        val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
+        val call = FakeCall()
+        val voice = VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope) { call }
+
+        voice.startChat(session, gateway, null)
+        voice.chat.first { it.live && it.phase == VoicePhase.Listening }
+
+        voice.toggleMute()
+        assertTrue(voice.chat.value.muted)
+        assertEquals(listOf(true), call.mutes)
+        assertEquals("session.input_audio.mute", call.sent.value.last()["type"]!!.jsonPrimitive.content)
+
+        voice.toggleMute()
+        assertTrue(!voice.chat.value.muted)
+        assertEquals(listOf(true, false), call.mutes)
+        assertEquals("session.input_audio.unmute", call.sent.value.last()["type"]!!.jsonPrimitive.content)
         voice.stopChat()
     }
 
