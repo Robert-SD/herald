@@ -171,59 +171,84 @@ class VoiceNarrationTest {
     }
 
     @Test
-    fun theWaitIsSaidAfterFiveSecondsThenEveryFifteenOrSo() = runTest {
+    fun theThoughtIsSaidAfterThreeSecondsAndStaysQuietWhileRunning() = runTest {
         val setup = chat()
         worksOnTheWeb(setup)
 
-        // Nothing over the first five seconds: the agent has only just been handed the request.
-        step(4_900)
+        // Nothing over the first three seconds: the thought is still qualifying.
+        step(2_900)
         assertTrue(setup.spoken.isEmpty())
 
         // Then a line about what it's at, and the chip says exactly what was said.
         step(100)
-        assertEquals(5_000L, testScheduler.currentTime)
+        assertEquals(3_000L, testScheduler.currentTime)
         assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
         assertEquals("Searching the web for Chicago weather.", setup.voice.chat.value.working)
 
-        // Nothing new: seventeen seconds on, and not the same words again.
-        step(16_000)
+        // Quiet while the same tool continues: no repetitive clock ticking.
+        step(20_000)
         assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
-        step(1_000)
-        assertEquals(
-            listOf("Searching the web for Chicago weather.", "Still searching the web."),
-            setup.spoken,
-        )
-        assertEquals(22_000L, testScheduler.currentTime)
+        assertEquals(23_000L, testScheduler.currentTime)
 
         setup.voice.stopChat()
     }
 
     @Test
-    fun aLongJobKeepsBeingAnnouncedRatherThanFallingSilent() = runTest {
+    fun aLongJobKeepsQuietWithoutRepetitiveTicking() = runTest {
         val setup = chat()
         worksOnTheWeb(setup)
 
-        // Three minutes of one tool running, and the voice is still saying so, never the same words twice running.
+        // Three minutes of one tool running: announced once at 3s and stays quiet.
         step(180_000)
 
-        assertTrue(setup.spoken.size >= 9, "said only ${setup.spoken.size} lines in three minutes: ${setup.spoken}")
-        assertEquals("Searching the web for Chicago weather.", setup.spoken.first())
-        setup.spoken.zipWithNext().forEach { (one, next) -> assertTrue(one != next, "the same line twice: $one") }
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+        assertEquals("Searching the web for Chicago weather.", setup.voice.chat.value.working)
         setup.voice.stopChat()
     }
 
     @Test
-    fun aNewToolIsSaidSoonAfterItStarts() = runTest {
+    fun aNewToolIsSaidOnceItPersistsThreeSeconds() = runTest {
         val setup = chat()
         worksOnTheWeb(setup)
-        step(5_000)
+        step(3_000)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
 
-        // The search is done and a command starts: news, so it's said on the fast cadence, not the slow one.
+        // The search is done and a command starts.
         setup.socket.event("tool.complete", """{"tool_id":"t1","summary":"Sunny"}""")
         setup.socket.event("tool.start", """{"tool_id":"t2","name":"terminal","context":"pytest -q"}""")
-        step(5_000)
+        testScheduler.runCurrent()
 
-        assertEquals(10_000L, testScheduler.currentTime)
+        // Before 3 seconds, the new tool is not spoken yet.
+        step(2_000)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+
+        // At 3 seconds on the new tool, it is announced.
+        step(1_000)
+        assertEquals(listOf("Searching the web for Chicago weather.", "Running a command now."), setup.spoken)
+        assertEquals("Running a command now.", setup.voice.chat.value.working)
+        setup.voice.stopChat()
+    }
+
+    @Test
+    fun fastIntermediateThoughtsAreSkipped() = runTest {
+        val setup = chat()
+        worksOnTheWeb(setup)
+        step(3_000)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+
+        // Tool 1 finishes, tool 2 starts and completes in only 1 second (too fast, skipped).
+        setup.socket.event("tool.complete", """{"tool_id":"t1","summary":"Sunny"}""")
+        setup.socket.event("tool.start", """{"tool_id":"t2","name":"read_file","context":"config.json"}""")
+        testScheduler.runCurrent()
+        step(1_000)
+        setup.socket.event("tool.complete", """{"tool_id":"t2","summary":"{}"}""")
+
+        // Tool 3 starts and runs for 5 seconds.
+        setup.socket.event("tool.start", """{"tool_id":"t3","name":"terminal","context":"make test"}""")
+        testScheduler.runCurrent()
+        step(3_000)
+
+        // Tool 2 (read_file) was skipped! Tool 3 is announced.
         assertEquals(listOf("Searching the web for Chicago weather.", "Running a command now."), setup.spoken)
         assertEquals("Running a command now.", setup.voice.chat.value.working)
         setup.voice.stopChat()
@@ -233,7 +258,7 @@ class VoiceNarrationTest {
     fun nothingIsSaidOnceTheReplySpeaks() = runTest {
         val setup = chat()
         worksOnTheWeb(setup)
-        step(5_000)
+        step(3_000)
         assertEquals(1, setup.spoken.size)
 
         // The reply has the voice: the chip goes with the narrator.
@@ -255,7 +280,7 @@ class VoiceNarrationTest {
     fun stoppingTheChatStopsTheNarrator() = runTest {
         val setup = chat()
         worksOnTheWeb(setup)
-        step(5_000)
+        step(3_000)
         val said = setup.spoken.size
 
         setup.voice.stopChat()

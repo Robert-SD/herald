@@ -356,22 +356,41 @@ internal class LiveConversation(
     }
 
     /**
-     * Tells the voice what Hermes is at every few seconds while the turn [askedKey] runs, on the same cadence the
-     * chained chat speaks on: the tool line it was handed when the tool started is all it has otherwise, and a
-     * voice waiting out a long job says it once and then has nothing.
+     * Tells the voice what Hermes is at whenever its thoughts change while the turn [askedKey] runs,
+     * throttled to at most once every 3 seconds to skip fast transient thoughts.
      */
     private suspend fun narrate(id: String?, askedKey: String?) {
         val narration = Narration(clock)
         while (currentCoroutineContext().isActive) {
-            delay(narration.waitMs())
             val chat = session.state.value
             if (!chat.running) return
             val from = chat.messages.indexOfFirst { it.key == askedKey }.takeIf { it >= 0 }
                 ?: chat.messages.indexOfLast { it is ChatMessage.User }
-            val line = narration.line(narrationActivity(chat, from)) ?: continue
-            // What the chip shows is what the voice was just told.
-            state.update { it.copy(working = line) }
-            send(LiveCommands.thinking(nextId("think"), id, line))
+            val activity = narrationActivity(chat, from)
+            val line = narration.line(activity)
+            if (line != null) {
+                // What the chip shows is what the voice was just told.
+                state.update { it.copy(working = line) }
+                send(LiveCommands.thinking(nextId("think"), id, line))
+            }
+            val wait = narration.waitMs(narrationActivity(session.state.value, from))
+            if (wait != null && wait > 0L) {
+                withTimeoutOrNull(wait) {
+                    session.state.first { current ->
+                        val currentFrom = current.messages.indexOfFirst { it.key == askedKey }.takeIf { it >= 0 }
+                            ?: current.messages.indexOfLast { it is ChatMessage.User }
+                        !current.running || narrationActivity(current, currentFrom).key != activity.key
+                    }
+                }
+            } else if (wait == 0L) {
+                continue
+            } else {
+                session.state.first { current ->
+                    val currentFrom = current.messages.indexOfFirst { it.key == askedKey }.takeIf { it >= 0 }
+                        ?: current.messages.indexOfLast { it is ChatMessage.User }
+                    !current.running || narrationActivity(current, currentFrom).key != narration.saidKey
+                }
+            }
         }
     }
 

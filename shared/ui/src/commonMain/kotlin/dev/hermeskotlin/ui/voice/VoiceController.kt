@@ -926,29 +926,40 @@ class VoiceController(
     }
 
     /**
-     * Says what Hermes is at, for as long as the turn runs, so a job that takes half a minute isn't half a minute
-     * of silence: a line every few seconds at first, then every fifteen or so as nothing new comes in, and every
-     * five again once a tool or a status does. [from] is where this turn's reply starts in the chat, which is
-     * where the tool running now is.
-     *
-     * It stops where it is ([stopNarrating]) the moment the reply's own voice starts, so a line never lands
-     * between two of the reply's sentences, and again when the turn ends.
+     * Says what Hermes is at whenever its thoughts change (thinking, tools, wrapping up), throttled to at most
+     * once every 3 seconds so fast intermediate thought transitions are skipped.
      */
     private fun narrate(session: ChatSession, gateway: GatewayUrl, profile: String?, from: Int) {
         stopNarrating()
         val narration = Narration(clock)
         narrator = scope.launch {
             while (currentCoroutineContext().isActive) {
-                delay(narration.waitMs())
-                // The reply is sounding right now: this line would be over it.
-                if (playing.value) continue
                 val chat = session.state.value
                 if (!chat.running) break
-                val line = narration.line(narrationActivity(chat, from)) ?: continue
-                // The chip shows the words that were said, so the screen and the voice never disagree.
-                _chat.update { it.copy(working = line) }
-                val speaker = narrationSpeaker
-                if (speaker != null) speaker.say(line) else sayAsNarrator(line, gateway, profile)
+                val activity = narrationActivity(chat, from)
+                if (!playing.value) {
+                    val line = narration.line(activity)
+                    if (line != null) {
+                        // The chip shows the words that were said, so the screen and the voice never disagree.
+                        _chat.update { it.copy(working = line) }
+                        val speaker = narrationSpeaker
+                        if (speaker != null) speaker.say(line) else sayAsNarrator(line, gateway, profile)
+                    }
+                }
+                val wait = narration.waitMs(narrationActivity(session.state.value, from))
+                if (wait != null && wait > 0L) {
+                    withTimeoutOrNull(wait) {
+                        session.state.first { current ->
+                            !current.running || narrationActivity(current, from).key != activity.key
+                        }
+                    }
+                } else if (wait == 0L) {
+                    continue
+                } else {
+                    session.state.first { current ->
+                        !current.running || narrationActivity(current, from).key != narration.saidKey
+                    }
+                }
             }
         }
     }
