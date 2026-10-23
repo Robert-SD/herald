@@ -10,9 +10,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -194,9 +196,15 @@ internal fun VoiceScreen(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    when {
-                        !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
-                        canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
+                    AnimatedVisibility(
+                        visible = !state.live && state.phase == VoicePhase.Speaking || canSendNow(state),
+                        enter = fadeIn() + expandHorizontally(),
+                        exit = fadeOut() + shrinkHorizontally(),
+                    ) {
+                        when {
+                            !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
+                            canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
+                        }
                     }
                     EndButton(onEnd)
                     // Mute sits beside End: the two ways of changing the call are together.

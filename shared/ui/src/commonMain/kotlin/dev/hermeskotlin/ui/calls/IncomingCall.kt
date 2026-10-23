@@ -195,7 +195,7 @@ internal fun InCallView(state: PhoneCallState, seconds: Long, onMute: () -> Unit
                 )
             }
         }
-        val canMute = voice.phase != VoicePhase.Off && voice.phase != VoicePhase.Connecting
+        val canMute = !state.ended && voice.phase != VoicePhase.Off
         Row(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 48.dp, end = 48.dp, bottom = 72.dp),
             horizontalArrangement = if (canMute) Arrangement.SpaceBetween else Arrangement.Center,

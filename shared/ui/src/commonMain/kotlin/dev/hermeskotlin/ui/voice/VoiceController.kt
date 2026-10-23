@@ -217,6 +217,8 @@ class VoiceController(
                 if (startLive(session, gateway, profile, opener)) return@launch
                 converseChained(session, gateway, profile, pauseMs, opener)
             } finally {
+                muted.value = false
+                recorder.setMuted(false)
                 // Also a chat ended before it found its mode (End during the status check). An ending the person
                 // chose needs no explanation; one forced by an error keeps it. A newer chat keeps its own.
                 if (chatJob == null || chatJob === coroutineContext.job) {
@@ -320,6 +322,7 @@ class VoiceController(
      * chained chat the microphone is closed and the chat waits for it to come back.
      */
     fun toggleMute() {
+        if (chatJob?.isActive != true) return
         val nowMuted = !_chat.value.muted
         _chat.update { it.copy(muted = nowMuted, level = 0f, hearing = false) }
         muted.value = nowMuted
@@ -1000,6 +1003,7 @@ class VoiceController(
         if (dictationJob?.isActive == true || chatJob?.isActive == true) return
         // The microphone would hear it.
         stopReading()
+        recorder.setMuted(false)
         _dictation.value = DictationState(recording = true)
         val device = deviceDictation?.takeIf { engine == DictationEngine.Device && it.available() }
         dictating = device

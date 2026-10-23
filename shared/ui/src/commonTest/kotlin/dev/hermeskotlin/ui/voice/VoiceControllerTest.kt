@@ -630,10 +630,13 @@ class VoiceControllerTest {
         val recorder = MutableRecorder()
         val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
 
+        voice.startChat(offlineSession(), gateway, null)
+        recorder.listening.first { it >= 1 }
         voice.toggleMute()
 
         assertTrue(voice.chat.value.muted)
         assertTrue(recorder.micOff)
+        voice.stopChat()
     }
 
     @Test
@@ -641,12 +644,62 @@ class VoiceControllerTest {
         val recorder = MutableRecorder()
         val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
 
+        voice.startChat(offlineSession(), gateway, null)
+        recorder.listening.first { it >= 1 }
         voice.toggleMute()
         voice.toggleMute()
 
         assertTrue(!voice.chat.value.muted)
         assertTrue(!recorder.micOff)
-        assertEquals(listOf(true, false), recorder.mutes)
+        assertEquals(listOf(false, true, false), recorder.mutes)
+        voice.stopChat()
+    }
+
+    @Test
+    fun toggleMuteDoesNothingOutsideOfAChat() = runTest {
+        val recorder = MutableRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.toggleMute()
+
+        assertTrue(!voice.chat.value.muted)
+        assertTrue(!recorder.micOff)
+    }
+
+    @Test
+    fun endingAMutedChatTurnsTheMicrophoneBackOn() = runTest {
+        val recorder = MutableRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.startChat(offlineSession(), gateway, null)
+        recorder.listening.first { it >= 1 }
+        voice.toggleMute()
+        assertTrue(recorder.micOff)
+
+        voice.stopChat()
+        voice.chat.first { it.phase == VoicePhase.Off }
+
+        assertTrue(!voice.chat.value.muted)
+        assertTrue(!recorder.micOff)
+    }
+
+    @Test
+    fun dictationWorksAfterEndingAMutedVoiceChat() = runTest {
+        val recorder = MutableRecorder()
+        val voice = VoiceController(audio("deploy the site", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        voice.startChat(offlineSession(), gateway, null)
+        recorder.listening.first { it >= 1 }
+        voice.toggleMute()
+        voice.stopChat()
+        voice.chat.first { it.phase == VoicePhase.Off }
+
+        val text = CompletableDeferred<String>()
+        voice.startDictation(gateway, null, DictationEngine.Gateway) { text.complete(it) }
+        recorder.listening.first { it >= 2 }
+        recorder.finish()
+
+        assertEquals("deploy the site", text.await())
     }
 
     /** A muted microphone hears nothing, so the chat waits for it to come back rather than asking again. */
@@ -675,9 +728,13 @@ class VoiceControllerTest {
         val recorder = MutableRecorder()
         val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
 
-        voice.toggleMute()
         voice.startChat(offlineSession(), gateway, null)
+        recorder.listening.first { it >= 1 }
+        voice.toggleMute()
+        voice.stopChat()
+        testScheduler.advanceUntilIdle()
 
+        voice.startChat(offlineSession(), gateway, null)
         assertTrue(!voice.chat.value.muted)
         assertTrue(!recorder.micOff)
         voice.stopChat()
