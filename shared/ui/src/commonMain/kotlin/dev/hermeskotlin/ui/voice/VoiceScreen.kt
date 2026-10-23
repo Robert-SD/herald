@@ -10,9 +10,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,7 +37,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -115,7 +116,7 @@ import kotlin.math.sqrt
 
 /**
  * A voice chat over the whole screen: the chat's name on top, what was said last as large captions, an orb
- * that moves with your voice or the reply, what's happening, and Mute (or Skip), End and Type round the
+ * that moves with your voice or the reply, what's happening, and Mute, End and Type round the
  * bottom. The chevron (or Back) folds it to the panel above the chat; Type ends the call for the keyboard.
  */
 @Composable
@@ -196,15 +197,27 @@ internal fun VoiceScreen(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    when {
-                        state.live && state.phase != VoicePhase.Connecting ->
-                            SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, "Mute", onMute, on = state.muted, toggle = true)
-                        !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
-                        canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
-                        // An empty slot keeps End in the middle.
-                        else -> Spacer(Modifier.size(52.dp))
+                    AnimatedVisibility(
+                        visible = !state.live && state.phase == VoicePhase.Speaking || canSendNow(state),
+                        enter = fadeIn() + expandHorizontally(),
+                        exit = fadeOut() + shrinkHorizontally(),
+                    ) {
+                        when {
+                            !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
+                            canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
+                        }
                     }
                     EndButton(onEnd)
+                    // Mute sits beside End: the two ways of changing the call are together.
+                    if (state.phase != VoicePhase.Off && state.phase != VoicePhase.Connecting) {
+                        SideButton(
+                            Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff,
+                            if (state.muted) "Unmute" else "Mute",
+                            onMute,
+                            on = state.muted,
+                            toggle = true,
+                        )
+                    }
                     SideButton(Lucide.Keyboard, "Type instead", onType)
                 }
             }

@@ -38,10 +38,12 @@ import kotlin.math.sqrt
 class AndroidVoiceRecorder : VoiceRecorder {
 
     @Volatile private var finishRequested = false
+    @Volatile private var muted = false
 
     @SuppressLint("MissingPermission") // The UI asks for RECORD_AUDIO before starting.
     override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording = withContext(Dispatchers.IO) {
         finishRequested = false
+        if (muted) return@withContext Recording(ByteArray(0), "audio/wav", heardSpeech = false)
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val record = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
@@ -66,7 +68,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
         var elapsed = 0L
         try {
             record.startRecording()
-            while (!finishRequested) {
+            while (!finishRequested && !muted) {
                 ensureActive()
                 val read = record.read(frame, 0, frame.size)
                 if (read <= 0) continue
@@ -92,11 +94,16 @@ class AndroidVoiceRecorder : VoiceRecorder {
             record.release()
             onLevel(0f)
         }
+        if (muted) return@withContext Recording(ByteArray(0), "audio/wav", heardSpeech = false)
         Recording(wav(pcm.toByteArray()), "audio/wav", endOfSpeech.heardSpeech || finishRequested && pcm.size() > SAMPLE_RATE / 2)
     }
 
     override fun finish() {
         finishRequested = true
+    }
+
+    override fun setMuted(muted: Boolean) {
+        this.muted = muted
     }
 
     /**
@@ -114,6 +121,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
     ): Recording? =
         withContext(Dispatchers.IO) {
             finishRequested = false
+            if (muted) return@withContext null
             val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val record = try {
                 AudioRecord(
@@ -147,6 +155,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 onListening()
                 while (true) {
                     ensureActive()
+                    if (muted) break
                     val read = record.read(frame, 0, frame.size)
                     if (read < 0) return@withContext null
                     if (read == 0) continue
@@ -187,6 +196,7 @@ class AndroidVoiceRecorder : VoiceRecorder {
                 record.release()
                 onLevel(0f)
             }
+            if (muted) return@withContext null
             Recording(wav(pcm.toByteArray()), "audio/wav", heardSpeech = bargeIn.spoke || finishRequested)
         }
 

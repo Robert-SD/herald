@@ -82,7 +82,7 @@ data class VoiceChatState(
     val error: String? = null,
     /** A GPT-Live call rather than Desktop's listen, send and read aloud. */
     val live: Boolean = false,
-    /** The microphone is off in a live call. */
+    /** The microphone is off: it hears nothing, and in a live call the voice model is told so too. */
     val muted: Boolean = false,
     /** The latest words said, as captions: yours, or the voice's when [captionIsVoice]. */
     val caption: String? = null,
@@ -178,6 +178,8 @@ class VoiceController(
     private var bargeIn: Deferred<BargeInSettings>? = null
     /** The microphone wouldn't listen over the voice in this chat; it isn't asked again. */
     private var cantListenOver = false
+    /** The microphone is off in the chained chat: the listen waits for it to come back. */
+    private val muted = MutableStateFlow(false)
 
     /**
      * [pauseMs] is how long a quiet spell after speech has to last before it's sent. [opener]: a call the agent placed,
@@ -198,6 +200,8 @@ class VoiceController(
         stoppedByUser = false
         roomFloor = 0f
         noSpeechStream = null
+        muted.value = false
+        recorder.setMuted(false)
         // Held now, on the tap: Android only lets the microphone go to the background from the foreground.
         away = false
         held = keepAlive?.hold(
@@ -213,6 +217,8 @@ class VoiceController(
                 if (startLive(session, gateway, profile, opener)) return@launch
                 converseChained(session, gateway, profile, pauseMs, opener)
             } finally {
+                muted.value = false
+                recorder.setMuted(false)
                 // Also a chat ended before it found its mode (End during the status check). An ending the person
                 // chose needs no explanation; one forced by an error keeps it. A newer chat keeps its own.
                 if (chatJob == null || chatJob === coroutineContext.job) {
@@ -311,12 +317,17 @@ class VoiceController(
         return true
     }
 
-    /** Turns the microphone off or on in a live call. */
+    /**
+     * Turns the microphone off or on. In a live call the voice model is told, so it stops waiting on you; in the
+     * chained chat the microphone is closed and the chat waits for it to come back.
+     */
     fun toggleMute() {
-        val conversation = live ?: return
-        val muted = !_chat.value.muted
-        conversation.setMuted(muted)
-        _chat.update { it.copy(muted = muted) }
+        if (chatJob?.isActive != true) return
+        val nowMuted = !_chat.value.muted
+        _chat.update { it.copy(muted = nowMuted, level = 0f, hearing = false) }
+        muted.value = nowMuted
+        recorder.setMuted(nowMuted)
+        live?.setMuted(nowMuted)
     }
 
     fun stopChat() {
@@ -461,6 +472,7 @@ class VoiceController(
     private suspend fun listenOver(activity: VoiceActivity, tripped: CompletableDeferred<Unit>): Recording? {
         val settings = bargeIn?.await() ?: return null
         if (!settings.enabled || cantListenOver) return null
+        if (muted.value) return null
         val detector = BargeIn(settings, activity.silenceMs, roomFloor)
         val heard = try {
             recorder.listenOver(
@@ -481,8 +493,8 @@ class VoiceController(
             _chat.update { it.copy(bargeIn = false) }
         }
         // The microphone wouldn't listen over the voice: the reply goes on as without barge-in, and doesn't offer it,
-        // this turn or the next.
-        if (heard == null) cantListenOver = true
+        // this turn or the next. A mute is asked again once the microphone comes back.
+        if (heard == null && !muted.value) cantListenOver = true
         return heard
     }
 
@@ -630,6 +642,11 @@ class VoiceController(
 
     /** What's said next, as [Heard] tells. An error on show stays through silence, and goes once words come. */
     private suspend fun hear(gateway: GatewayUrl, profile: String?, activity: VoiceActivity): Heard {
+        // Muted: the microphone is off, so wait for it rather than ask for a recording that would hear nothing.
+        if (muted.value) {
+            _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
+            muted.first { !it }
+        }
         _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
         val recording = try {
             recorder.record(
@@ -986,6 +1003,7 @@ class VoiceController(
         if (dictationJob?.isActive == true || chatJob?.isActive == true) return
         // The microphone would hear it.
         stopReading()
+        recorder.setMuted(false)
         _dictation.value = DictationState(recording = true)
         val device = deviceDictation?.takeIf { engine == DictationEngine.Device && it.available() }
         dictating = device
