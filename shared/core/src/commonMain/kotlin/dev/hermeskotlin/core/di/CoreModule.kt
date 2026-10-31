@@ -28,7 +28,9 @@ import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.AccessTokens
 import dev.hermeskotlin.core.gateway.ConnectionCheck
 import dev.hermeskotlin.core.gateway.GatewayProbe
+import dev.hermeskotlin.core.gateway.ClientCertAliases
 import dev.hermeskotlin.core.gateway.GatewayRepository
+import dev.hermeskotlin.core.gateway.mtlsEngine
 import dev.hermeskotlin.core.media.LinkPreviews
 import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.media.publicWebEngine
@@ -45,6 +47,7 @@ import dev.hermeskotlin.core.settings.startInstruction
 import dev.hermeskotlin.core.rpc.openGatewaySocket
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.slash.SlashApi
+import dev.hermeskotlin.core.update.RenameNotice
 import dev.hermeskotlin.core.update.UpdateChecker
 import dev.hermeskotlin.core.journey.JourneyApi
 import dev.hermeskotlin.core.pet.PetApi
@@ -80,7 +83,9 @@ val coreModule = module {
     single { WebCookieJar(get(), get(), get(), get()) }
     single { AccessTokens(get()) }
     single { NativeTokens(get()) }
-    single { createHttpClient(cookies = get<PersistentCookiesStorage>(), access = get(), bearer = get()) }
+    single { ClientCertAliases() }
+    // One engine for the REST calls and the /api/ws upgrade, presenting each gateway's client certificate.
+    single { createHttpClient(engine = mtlsEngine(get(), get()), cookies = get<PersistentCookiesStorage>(), access = get(), bearer = get()) }
     single { GatewayProbe(get()) }
     single {
         val client = get<HttpClient>()
@@ -146,6 +151,7 @@ val coreModule = module {
     // Previews fetch without a tap, so their client also refuses addresses on the user's own networks.
     single { LinkPreviews(createHttpClient(publicWebEngine())) }
     single { UpdateChecker(get(named(OUTSIDE_CLIENT)), get()) }
+    single { RenameNotice(get(), get()) }
     // ntfy is someone else's server: never send it the gateway's cookies.
     single { NtfyClient(get(named(OUTSIDE_CLIENT))) }
     single { PushApi(get()) }

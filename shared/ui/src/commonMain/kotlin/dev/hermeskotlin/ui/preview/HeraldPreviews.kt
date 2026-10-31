@@ -22,6 +22,7 @@ import dev.hermeskotlin.designsystem.components.LocalGlow
 import dev.hermeskotlin.designsystem.components.SheetHeader
 import dev.hermeskotlin.ui.chat.PendingComment
 import dev.hermeskotlin.ui.connect.AccessToken
+import dev.hermeskotlin.ui.connect.ClientCert
 import dev.hermeskotlin.ui.connect.ConnectUiState
 import dev.hermeskotlin.ui.connect.ConnectView
 import dev.hermeskotlin.ui.connect.ConnectionChecklist
@@ -100,10 +101,13 @@ import dev.hermeskotlin.ui.sessions.ProjectDraft
 import dev.hermeskotlin.core.projects.FolderListing
 import dev.hermeskotlin.ui.sessions.ProjectActionsSheet
 import dev.hermeskotlin.ui.sessions.NewProjectDialog
+import dev.hermeskotlin.ui.settings.AppIconScreen
 import dev.hermeskotlin.ui.settings.ConnectionCheckSheet
 import dev.hermeskotlin.ui.settings.GatewayInfo
 import dev.hermeskotlin.ui.settings.SettingsView
 import dev.hermeskotlin.ui.settings.StartInstructionView
+import dev.hermeskotlin.ui.update.LocalRenameOffer
+import dev.hermeskotlin.ui.update.RenameOffer
 import androidx.compose.ui.tooling.preview.Preview
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatState
@@ -139,11 +143,13 @@ enum class PreviewScene(val label: String) {
     ReadAloudFailed("A reply the gateway couldn't voice"),
     NewChat("A new chat"),
     Sidebar("The sessions sidebar"),
+    Renamed("The sidebar after updating from Herald, with the rename card"),
     Bots("The bots and rooms"),
     Room("A room of bots"),
     NewRoom("A new room"),
     BotEditor("Editing a bot"),
     Settings("Settings"),
+    AppIcons("The app icons"),
     StartInstruction("The starting instruction for new chats"),
     Gateways("Saved gateways"),
     Journey("What the agent has learned"),
@@ -241,6 +247,19 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         projects = ChatSamples.projects,
                     )
                 }
+                PreviewScene.Renamed -> OpenSidebar {
+                    CompositionLocalProvider(LocalRenameOffer provides RenameOffer(show = true) {}) {
+                        SessionsSidebarSample(
+                            ChatSamples.sessions(),
+                            selectedId = "s1",
+                            userLabel = ChatSamples.USER,
+                            statuses = ChatSamples.sessionStatuses,
+                            drafts = ChatSamples.sessionDrafts,
+                            projects = ChatSamples.projects,
+                        )
+                    }
+                }
+                PreviewScene.AppIcons -> AppIconScreen(onBack = {})
                 PreviewScene.Threads -> OpenSidebar {
                     SessionsSidebarSample(
                         ChatSamples.threadSessions(),
@@ -302,7 +321,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         ProjectActionsSheet(site, onDismiss = {}, onRename = {}, onDelete = {}, onSave = {})
                     } else {
                         NewProjectDialog(
-                            ProjectDraft(name = "Herald", folder = "/home/you/projects/herald"),
+                            ProjectDraft(name = "Kyllene", folder = "/home/you/projects/kyllene"),
                             busy = false,
                             error = null,
                             onDismiss = {},
@@ -313,6 +332,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                                     if (dir.endsWith("/projects/")) listOf("herald", "notes-app", "site") else listOf("androidApp", "docs", "shared"),
                                 )
                             },
+                            makeFolder = { _, _ -> null },
                         )
                     }
                 }
@@ -415,6 +435,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         onSetPrimary = {},
                         onRename = { _, _ -> },
                         onRemove = {},
+                        onSetClientCert = { _, _ -> },
                     )
                 }
                 PreviewScene.BotEditor -> BotEditor(
@@ -843,6 +864,7 @@ private fun SampleConnect(result: ProbeResult, address: String = "hermes.example
         url = remember { TextFieldState(address) },
         state = ConnectUiState(result = result),
         access = AccessToken(remember { TextFieldState() }, remember { TextFieldState() }, saved = false, onForget = {}),
+        cert = ClientCert(alias = null, onPick = {}, onClear = {}),
         onTest = {},
         onContinue = {},
         onCancel = null,
