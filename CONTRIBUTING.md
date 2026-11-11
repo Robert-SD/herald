@@ -10,7 +10,7 @@ Thanks for helping. Bug fixes, missing gateway features and UI polish are all we
 
 ## Setup
 
-You need JetBrains Runtime 25 (Android Studio's bundled JBR is one; Gradle downloads it when none is found) and the Android SDK with API 37. You also need a Hermes gateway to test against: your own, or a throwaway one.
+You need JetBrains Runtime 25 (Android Studio's bundled JBR is one; Gradle downloads it when none is found) and the Android SDK with API 37.1. You also need a Hermes gateway to test against: your own, or a throwaway one.
 
 ```bash
 ./gradlew :androidApp:installDebug
@@ -73,8 +73,8 @@ Never show private data: no real chats, prompts, scheduled jobs, bots or gateway
 
 The landing page at [kyllene.app](https://kyllene.app) is the static site in `website/`: plain HTML and CSS, no build
 step. Preview it with any static server, for example `npx http-server website`, and check it at 375 px wide as well as
-on a desktop. Its screenshots are copies from `docs/screenshots`, so the same rules apply. Maintainers deploy it to
-Cloudflare Pages by hand:
+on a desktop. Its screenshots are copies from `docs/screenshots`, so the same rules apply. A merge to `master` that
+changes `website/` deploys it to Cloudflare Pages (`.github/workflows/website.yml`). By hand, maintainers run:
 
 ```bash
 npx wrangler pages deploy website --project-name kyllene --branch master

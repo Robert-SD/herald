@@ -17,6 +17,7 @@ import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -57,6 +58,8 @@ import dev.hermeskotlin.designsystem.typography
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
+import dev.hermeskotlin.ui.resources.*
+import org.jetbrains.compose.resources.stringResource
 
 /** What a new project starts with: blank, or a folder the gateway grouped chats by, to keep as a project. */
 internal data class ProjectDraft(val name: String = "", val folder: String = "")
@@ -82,10 +85,10 @@ internal fun ProjectActionsSheet(
         SheetHeader(p.label, subtitle = p.path)
         val act = { action: (Project) -> Unit -> { onDismiss(); action(p) } }
         if (p.isUserMade) {
-            SheetAction("Rename", Lucide.Pencil, act(onRename))
-            SheetAction("Delete project", Lucide.Trash2, act(onDelete), destructive = true)
+            SheetAction(stringResource(Res.string.sessions_rename), Lucide.Pencil, act(onRename))
+            SheetAction(stringResource(Res.string.sessions_delete_project), Lucide.Trash2, act(onDelete), destructive = true)
         } else if (p.path != null) {
-            SheetAction("Save as project", Lucide.FolderPlus, act(onSave))
+            SheetAction(stringResource(Res.string.sessions_save_as_project), Lucide.FolderPlus, act(onSave))
         }
     }
 }
@@ -100,11 +103,11 @@ internal fun ProjectActionsSheet(
 internal fun NewProjectDialog(
     draft: ProjectDraft?,
     busy: Boolean,
-    error: String?,
+    error: Said?,
     onDismiss: () -> Unit,
     onCreate: (name: String, folder: String) -> Unit,
     listFolders: suspend (dir: String, prefix: String) -> FolderListing,
-    makeFolder: (suspend (dir: String, name: String) -> String?)? = null,
+    makeFolder: (suspend (dir: String, name: String) -> Said?)? = null,
 ) {
     var shown by remember { mutableStateOf(draft) }
     if (draft != null) shown = draft
@@ -127,13 +130,13 @@ internal fun NewProjectDialog(
     Dialog(
         visible = draft != null,
         onDismissRequest = { if (dir != null) browsing = null else if (!busy) onDismiss() },
-        title = if (dir != null) "Choose a folder" else "New project",
-        message = if (dir != null) null else "Chats in the folder group under the project, and a new chat started in it runs there.",
+        title = stringResource(if (dir != null) Res.string.sessions_choose_folder else Res.string.sessions_new_project),
+        message = if (dir != null) null else stringResource(Res.string.sessions_new_project_detail),
         actions = {
             if (dir != null) {
-                Button("Back", onClick = { browsing = null }, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+                Button(stringResource(Res.string.common_back), onClick = { browsing = null }, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
                 Button(
-                    "Use this folder",
+                    stringResource(Res.string.sessions_use_this_folder),
                     onClick = {
                         folder.edit { replace(0, length, FolderPath.picked(dir)) }
                         if (nameText.isEmpty()) FolderPath.name(dir)?.let { n -> name.edit { replace(0, length, n) } }
@@ -142,8 +145,8 @@ internal fun NewProjectDialog(
                     size = ButtonSize.Small,
                 )
             } else {
-                Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small, enabled = !busy)
-                Button("Create", onClick = submit, size = ButtonSize.Small, enabled = nameText.isNotEmpty(), loading = busy)
+                Button(stringResource(Res.string.common_cancel), onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small, enabled = !busy)
+                Button(stringResource(Res.string.sessions_create), onClick = submit, size = ButtonSize.Small, enabled = nameText.isNotEmpty(), loading = busy)
             }
         },
     ) {
@@ -151,25 +154,25 @@ internal fun NewProjectDialog(
             FolderPicker(dir, onOpen = { browsing = it }, listFolders = listFolders, makeFolder = makeFolder)
             return@Dialog
         }
-        TextField(state = name, label = "Name", placeholder = "Kyllene", enabled = !busy, autofocus = true)
+        TextField(state = name, label = stringResource(Res.string.sessions_project_name), placeholder = "Kyllene", enabled = !busy, autofocus = true)
         TextField(
             state = folder,
-            label = "Folder on the gateway",
+            label = stringResource(Res.string.sessions_project_folder),
             placeholder = "/home/you/projects/herald",
-            supportingText = "Optional. A folder on the machine Hermes runs on.",
+            supportingText = stringResource(Res.string.sessions_project_folder_hint),
             enabled = !busy,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             onKeyboardAction = { submit() },
         )
         Button(
-            "Browse folders",
+            stringResource(Res.string.sessions_browse_folders),
             onClick = { browsing = FolderPath.dirOf(folder.text.toString()) },
             variant = ButtonVariant.Outline,
             size = ButtonSize.Small,
             enabled = !busy,
             leadingIcon = Lucide.FolderOpen,
         )
-        error?.let { Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
+        error?.let { Text(it.text(), style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
     }
 }
 
@@ -183,13 +186,16 @@ private fun FolderPicker(
     dir: String,
     onOpen: (String) -> Unit,
     listFolders: suspend (dir: String, prefix: String) -> FolderListing,
-    makeFolder: (suspend (dir: String, name: String) -> String?)?,
+    makeFolder: (suspend (dir: String, name: String) -> Said?)?,
 ) {
     val filter = rememberTextFieldState()
     val newName = rememberTextFieldState()
     var naming by remember(dir) { mutableStateOf(false) }
     var making by remember(dir) { mutableStateOf(false) }
-    var makeError by remember(dir) { mutableStateOf<String?>(null) }
+    // Which Create is the field's own; closing the field moves it on, so a Create still waiting is dropped.
+    var makeTry by remember(dir) { mutableIntStateOf(0) }
+    var relist by remember(dir) { mutableIntStateOf(0) }
+    var makeError by remember(dir) { mutableStateOf<Said?>(null) }
     val scope = rememberCoroutineScope()
     val current by rememberUpdatedState(dir)
     // The gateway makes folders by absolute path only; a relative one is the cwd's when listed.
@@ -200,8 +206,8 @@ private fun FolderPicker(
     }
     val prefix = filter.text.toString()
     var listing by remember(dir) { mutableStateOf<FolderListing?>(null) }
-    var failed by remember(dir) { mutableStateOf<String?>(null) }
-    LaunchedEffect(dir, prefix) {
+    var failed by remember(dir) { mutableStateOf<Said?>(null) }
+    LaunchedEffect(dir, prefix, relist) {
         if (prefix.isNotEmpty()) delay(250)
         try {
             listing = listFolders(dir, prefix)
@@ -209,27 +215,33 @@ private fun FolderPicker(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            failed = e.message?.takeIf { it.isNotBlank() } ?: "Couldn't list this folder."
+            failed = saidOr(e.message, said(Res.string.sessions_folder_list_failed))
         }
     }
     val secondary = Theme[colors][textSecondary]
     Text(dir, style = Theme[typography][bodySmall], color = secondary)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         val up = FolderPath.parent(dir)
-        IconButton(Lucide.FolderUp, contentDescription = "Up a folder", onClick = { up?.let(onOpen) }, enabled = up != null)
+        IconButton(Lucide.FolderUp, contentDescription = stringResource(Res.string.sessions_folder_up), onClick = { up?.let(onOpen) }, enabled = up != null)
         IconButton(
             Lucide.House,
-            contentDescription = "Home folder",
+            contentDescription = stringResource(Res.string.sessions_folder_home),
             onClick = { onOpen(FolderPath.HOME) },
             enabled = dir != FolderPath.HOME,
         )
         if (canMake) {
-            IconButton(Lucide.FolderPlus, contentDescription = "New folder", onClick = {
+            IconButton(Lucide.FolderPlus, contentDescription = stringResource(Res.string.sessions_folder_new), onClick = {
                 naming = !naming
                 makeError = null
+                if (!naming) {
+                    // Closed: reopened, it starts empty, and a Create still waiting doesn't open its folder.
+                    newName.edit { replace(0, length, "") }
+                    makeTry++
+                    making = false
+                }
             })
         }
-        TextField(state = filter, modifier = Modifier.weight(1f), placeholder = "Filter", leadingIcon = Lucide.Search)
+        TextField(state = filter, modifier = Modifier.weight(1f), placeholder = stringResource(Res.string.sessions_folder_filter), leadingIcon = Lucide.Search)
     }
     if (naming && canMake && makeFolder != null) {
         val name = newName.text.toString().trim()
@@ -239,11 +251,18 @@ private fun FolderPicker(
                 // Set before the launch, so Done and Create in the same frame make it once.
                 making = true
                 val asked = dir
+                val thisTry = ++makeTry
                 scope.launch {
-                    makeError = makeFolder(asked, name)
+                    val error = makeFolder(asked, name)
+                    if (thisTry != makeTry) {
+                        // The field was closed while the gateway was asked, but it may have made the folder.
+                        if (error == null && current == asked) relist++
+                        return@launch
+                    }
+                    makeError = error
                     making = false
                     // Not if Up, Home or a folder moved the picker on while the gateway was asked.
-                    if (makeError == null && current == asked) onOpen(FolderPath.child(asked, name))
+                    if (error == null && current == asked) onOpen(FolderPath.child(asked, name))
                 }
             }
         }
@@ -251,28 +270,31 @@ private fun FolderPicker(
             TextField(
                 state = newName,
                 modifier = Modifier.weight(1f),
-                placeholder = "New folder's name",
+                placeholder = stringResource(Res.string.sessions_folder_new_name),
                 enabled = !making,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 onKeyboardAction = { make() },
             )
-            Button("Create", onClick = make, size = ButtonSize.Small, enabled = valid, loading = making)
+            Button(stringResource(Res.string.sessions_create), onClick = make, size = ButtonSize.Small, enabled = valid, loading = making)
         }
-        makeError?.let { Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
+        makeError?.let { Text(it.text(), style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
     }
     Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScrollWithBar()) {
         // Narrowed here too, so the last answer matches the filter while the gateway is asked again.
         val folders = listing?.folders.orEmpty()
             .filter { it.startsWith(prefix, ignoreCase = true) && (!it.startsWith(".") || prefix.startsWith(".")) }
         when {
-            failed != null -> CopyableOnDesktop { Text(failed.orEmpty(), style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
+            failed != null -> {
+                val reason = failed?.text().orEmpty()
+                CopyableOnDesktop { Text(reason, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
+            }
             listing == null -> Spinner(Modifier.padding(12.dp).size(20.dp))
-            folders.isEmpty() -> Text("No folders here.", style = Theme[typography][bodySmall], color = secondary)
+            folders.isEmpty() -> Text(stringResource(Res.string.sessions_folder_empty), style = Theme[typography][bodySmall], color = secondary)
             else -> folders.forEach { SheetAction(it, Lucide.Folder, onClick = { onOpen(FolderPath.child(dir, it)) }) }
         }
         if (failed == null && listing?.more == true) {
             Text(
-                "Some folders may not show here. Type the start of a name to find one.",
+                stringResource(Res.string.sessions_folder_more),
                 style = Theme[typography][bodySmall],
                 color = secondary,
                 modifier = Modifier.padding(top = 8.dp),
@@ -341,10 +363,10 @@ internal fun RenameProjectDialog(project: Project?, onDismiss: () -> Unit, onRen
     Dialog(
         visible = project != null,
         onDismissRequest = onDismiss,
-        title = "Rename project",
+        title = stringResource(Res.string.sessions_rename_project),
         actions = {
-            Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
-            Button("Save", onClick = submit, size = ButtonSize.Small, enabled = nameText.isNotEmpty())
+            Button(stringResource(Res.string.common_cancel), onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+            Button(stringResource(Res.string.sessions_save), onClick = submit, size = ButtonSize.Small, enabled = nameText.isNotEmpty())
         },
     ) {
         TextField(
@@ -365,11 +387,11 @@ internal fun DeleteProjectDialog(project: Project?, onDismiss: () -> Unit, onDel
     Dialog(
         visible = project != null,
         onDismissRequest = onDismiss,
-        title = "Delete project?",
-        message = "“${p.label}” is removed from the gateway. Its chats stay, and are grouped by their folder again.",
+        title = stringResource(Res.string.sessions_delete_project_title),
+        message = stringResource(Res.string.sessions_delete_project_detail, p.label),
         actions = {
-            Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
-            Button("Delete", onClick = { onDismiss(); onDelete(p) }, variant = ButtonVariant.Danger, size = ButtonSize.Small)
+            Button(stringResource(Res.string.common_cancel), onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
+            Button(stringResource(Res.string.sessions_delete), onClick = { onDismiss(); onDelete(p) }, variant = ButtonVariant.Danger, size = ButtonSize.Small)
         },
     )
 }
