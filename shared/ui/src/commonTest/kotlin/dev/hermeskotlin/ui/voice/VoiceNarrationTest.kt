@@ -17,6 +17,7 @@ import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.SpokenAudio
 import dev.hermeskotlin.core.voice.VoiceActivity
 import dev.hermeskotlin.core.voice.VoiceRecorder
+import dev.hermeskotlin.core.voice.voiceAcknowledgements
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -126,7 +127,8 @@ class VoiceNarrationTest {
                     "/api/audio/speak" -> {
                         val line = Json.parseToJsonElement(request.body.toByteArray().decodeToString()).jsonObject["text"]!!.jsonPrimitive.content
                         spoken += line
-                        voiced.complete(line)
+                        // The acknowledgement that opens a turn isn't the narration the test waits on.
+                        if (line !in voiceAcknowledgements) voiced.complete(line)
                         respond("""{"ok":true,"data_url":"data:audio/mpeg;base64,AAAA","mime_type":"audio/mpeg"}""", HttpStatusCode.OK, json)
                     }
                     else -> respond("""{"ok":true}""", HttpStatusCode.OK, json)
@@ -157,6 +159,9 @@ class VoiceNarrationTest {
         return Setup(socket, voice, spoken, voiced)
     }
 
+    /** The narrator's own lines, without the acknowledgement that opens a turn. */
+    private fun Setup.narrated(): List<String> = spoken.filterNot { it in voiceAcknowledgements }
+
     /** The agent takes the request and starts on the web; nothing else comes for a while. */
     private fun TestScope.worksOnTheWeb(setup: Setup) {
         setup.socket.event("message.start")
@@ -171,23 +176,38 @@ class VoiceNarrationTest {
     }
 
     @Test
+    fun theSentenceIsAcknowledgedAsSoonAsItIsTaken() = runTest {
+        val setup = chat()
+        step(0)
+
+        // One of the acknowledgement words, straight away, before the narrator's three seconds have passed.
+        assertEquals(1, setup.spoken.size)
+        assertTrue(setup.spoken.single() in voiceAcknowledgements)
+        assertTrue(setup.narrated().isEmpty())
+        setup.voice.stopChat()
+    }
+
+    @Test
     fun theThoughtIsSaidAfterThreeSecondsAndStaysQuietWhileRunning() = runTest {
         val setup = chat()
         worksOnTheWeb(setup)
 
-        // Nothing over the first three seconds: the thought is still qualifying.
+        // The sentence is acknowledged at once; over the first three seconds nothing else is said: the thought is
+        // still qualifying.
         step(2_900)
-        assertTrue(setup.spoken.isEmpty())
+        assertEquals(1, setup.spoken.size)
+        assertTrue(setup.spoken.single() in voiceAcknowledgements)
+        assertTrue(setup.narrated().isEmpty())
 
         // Then a line about what it's at, and the chip says exactly what was said.
         step(100)
         assertEquals(3_000L, testScheduler.currentTime)
-        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.narrated())
         assertEquals("Searching the web for Chicago weather.", setup.voice.chat.value.working)
 
         // Quiet while the same tool continues: no repetitive clock ticking.
         step(20_000)
-        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.narrated())
         assertEquals(23_000L, testScheduler.currentTime)
 
         setup.voice.stopChat()
@@ -201,7 +221,7 @@ class VoiceNarrationTest {
         // Three minutes of one tool running: announced once at 3s and stays quiet.
         step(180_000)
 
-        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.narrated())
         assertEquals("Searching the web for Chicago weather.", setup.voice.chat.value.working)
         setup.voice.stopChat()
     }
@@ -211,7 +231,7 @@ class VoiceNarrationTest {
         val setup = chat()
         worksOnTheWeb(setup)
         step(3_000)
-        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.narrated())
 
         // The search is done and a command starts.
         setup.socket.event("tool.complete", """{"tool_id":"t1","summary":"Sunny"}""")
@@ -220,11 +240,11 @@ class VoiceNarrationTest {
 
         // Before 3 seconds, the new tool is not spoken yet.
         step(2_000)
-        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.narrated())
 
         // At 3 seconds on the new tool, it is announced.
         step(1_000)
-        assertEquals(listOf("Searching the web for Chicago weather.", "Running a command now."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather.", "Running a command now."), setup.narrated())
         assertEquals("Running a command now.", setup.voice.chat.value.working)
         setup.voice.stopChat()
     }
@@ -234,7 +254,7 @@ class VoiceNarrationTest {
         val setup = chat()
         worksOnTheWeb(setup)
         step(3_000)
-        assertEquals(listOf("Searching the web for Chicago weather."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather."), setup.narrated())
 
         // Tool 1 finishes, tool 2 starts and completes in only 1 second (too fast, skipped).
         setup.socket.event("tool.complete", """{"tool_id":"t1","summary":"Sunny"}""")
@@ -249,7 +269,7 @@ class VoiceNarrationTest {
         step(3_000)
 
         // Tool 2 (read_file) was skipped! Tool 3 is announced.
-        assertEquals(listOf("Searching the web for Chicago weather.", "Running a command now."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather.", "Running a command now."), setup.narrated())
         assertEquals("Running a command now.", setup.voice.chat.value.working)
         setup.voice.stopChat()
     }
@@ -259,20 +279,20 @@ class VoiceNarrationTest {
         val setup = chat()
         worksOnTheWeb(setup)
         step(3_000)
-        assertEquals(1, setup.spoken.size)
+        assertEquals(1, setup.narrated().size)
 
         // The reply has the voice: the chip goes with the narrator.
         setup.socket.event("message.delta", """{"text":"It's sunny. "}""")
         setup.socket.event("message.complete", """{"text":"It's sunny. ","status":"complete"}""")
         // The reply's own voice takes the speaker, and the chip goes with the narrator.
-        setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.spoken.size == 2 }
+        setup.voice.chat.first { it.phase == VoicePhase.Listening && setup.narrated().size == 2 }
 
         // The agent goes back to work after the reply: nothing of the narrator's lands over it, or after it.
         setup.socket.event("message.start")
         setup.socket.event("tool.start", """{"tool_id":"t2","name":"terminal","context":"ls"}""")
         step(60_000)
 
-        assertEquals(listOf("Searching the web for Chicago weather.", "It's sunny."), setup.spoken)
+        assertEquals(listOf("Searching the web for Chicago weather.", "It's sunny."), setup.narrated())
         setup.voice.stopChat()
     }
 

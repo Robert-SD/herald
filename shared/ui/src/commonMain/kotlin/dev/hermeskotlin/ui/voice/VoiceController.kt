@@ -24,6 +24,7 @@ import dev.hermeskotlin.core.voice.NarrationSpeaker
 import dev.hermeskotlin.core.voice.ReadAloudVoices
 import dev.hermeskotlin.core.voice.InMemoryReadAloudVoices
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
+import dev.hermeskotlin.core.voice.acknowledgement
 import dev.hermeskotlin.core.voice.monotonicMs
 import dev.hermeskotlin.core.voice.narrationActivity
 import dev.hermeskotlin.core.voice.Recording
@@ -498,7 +499,7 @@ class VoiceController(
                     return@coroutineScope null
                 }
                 // From here the agent is at work, and the wait for its reply is the long part of a turn.
-                narrate(session, gateway, profile, sentAt)
+                narrate(session, gateway, profile, sentAt, acknowledge = true)
                 overVoice(session, gateway, profile, activity) { voiceAsWritten(session, sentAt, opening) }
             } ?: return Turn.Failed
             val voiced = when (cut) {
@@ -1070,12 +1071,15 @@ class VoiceController(
 
     /**
      * Says what Hermes is at whenever its thoughts change (thinking, tools, wrapping up), throttled to at most
-     * once every 3 seconds so fast intermediate thought transitions are skipped.
+     * once every 3 seconds so fast intermediate thought transitions are skipped. With [acknowledge], a short word
+     * that the sentence was heard comes first, the moment the turn is taken.
      */
-    private fun narrate(session: ChatSession, gateway: GatewayUrl, profile: String?, from: Int) {
+    private fun narrate(session: ChatSession, gateway: GatewayUrl, profile: String?, from: Int, acknowledge: Boolean = false) {
         stopNarrating()
         val narration = Narration(clock)
         narrator = scope.launch {
+            // The sentence is taken: one word that it was heard, before the wait is narrated.
+            if (acknowledge && session.state.value.running && !playing.value) say(acknowledgement(), gateway, profile)
             while (currentCoroutineContext().isActive) {
                 val chat = session.state.value
                 if (!chat.running) break
@@ -1085,8 +1089,7 @@ class VoiceController(
                     if (line != null) {
                         // The chip shows the words that were said, so the screen and the voice never disagree.
                         _chat.update { it.copy(working = line) }
-                        val speaker = narrationSpeaker
-                        if (speaker != null) speaker.say(line) else sayAsNarrator(line, gateway, profile)
+                        say(line, gateway, profile)
                     }
                 }
                 val wait = narration.waitMs(narrationActivity(session.state.value, from))
@@ -1114,10 +1117,16 @@ class VoiceController(
         _chat.update { if (it.working != null) it.copy(working = null) else it }
     }
 
+    /** Says [line] with a test's speaker, or the gateway's voice when there is none. */
+    private suspend fun say(line: String, gateway: GatewayUrl, profile: String?) {
+        val speaker = narrationSpeaker
+        if (speaker != null) speaker.say(line) else sayAsNarrator(line, gateway, profile)
+    }
+
     /**
-     * Says one narrator's line. It isn't the reply, so it adds to what's known to be the phone's own voice rather
-     * than replacing it, since its echo over the microphone is its own voice too. A line the gateway can't voice
-     * is passed over in silence: a commentary on the wait is never worth an error over the turn.
+     * Says one line that isn't the reply. It adds to what's known to be the phone's own voice rather than replacing
+     * it, since its echo over the microphone is its own voice too. A line the gateway can't voice is passed over in
+     * silence: a commentary on the wait is never worth an error over the turn.
      */
     private suspend fun sayAsNarrator(line: String, gateway: GatewayUrl, profile: String?) = coroutineScope {
         voiced = listOf(voiced, line).filter { it.isNotEmpty() }.joinToString(" ")

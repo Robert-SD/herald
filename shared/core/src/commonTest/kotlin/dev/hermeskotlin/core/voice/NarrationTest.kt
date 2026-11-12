@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.voice
 
+import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -164,6 +165,15 @@ class NarrationTest {
         assertEquals("Preparing now.", narrationLine(NarrationActivity(thinking = "preparing")))
         assertEquals("Wrapping up now.", narrationLine(NarrationActivity(wrappingUp = true)))
         assertEquals("Finishing up now.", narrationLine(NarrationActivity(wrappingUp = true), other = true))
+    }
+
+    @Test
+    fun anAcknowledgementIsOneOfTenWordsPickedAtRandom() {
+        assertEquals(10, voiceAcknowledgements.size)
+        repeat(50) { seed ->
+            val random = Random(seed)
+            assertEquals(voiceAcknowledgements[random.nextInt(voiceAcknowledgements.size)], acknowledgement(Random(seed)))
+        }
     }
 
     @Test
