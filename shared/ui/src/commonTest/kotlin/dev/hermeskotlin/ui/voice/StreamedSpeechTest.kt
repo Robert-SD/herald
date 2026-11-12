@@ -13,6 +13,7 @@ import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import dev.hermeskotlin.core.voice.AudioApi
 import dev.hermeskotlin.core.voice.BargeIn
+import dev.hermeskotlin.core.voice.NarrationSpeaker
 import dev.hermeskotlin.core.voice.Recording
 import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.SpeechStream
@@ -355,7 +356,16 @@ class StreamedSpeechTest {
         connection.state.first { it is ConnectionState.Connected }
         val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
         session.start()
-        val voice = VoiceController(AudioApi(client), recorder, player, backgroundScope, backgroundScope, speechStreams = { _, _ -> streams() })
+        val voice = VoiceController(
+            AudioApi(client),
+            recorder,
+            player,
+            backgroundScope,
+            backgroundScope,
+            speechStreams = { _, _ -> streams() },
+            // What the chat says of its own (the acknowledgement, the wait) isn't the reply's voice under test here.
+            narrationSpeaker = NarrationSpeaker { },
+        )
         voice.startChat(session, gateway, "rin")
         socket.submits.first { it.isNotEmpty() }
         return Setup(socket, voice, player, spoken, session)

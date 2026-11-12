@@ -15,6 +15,7 @@ import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import dev.hermeskotlin.core.voice.AudioApi
 import dev.hermeskotlin.core.voice.LiveCall
 import dev.hermeskotlin.core.voice.DeviceLock
+import dev.hermeskotlin.core.voice.NarrationSpeaker
 import dev.hermeskotlin.core.voice.Recording
 import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.SpokenAudio
@@ -817,7 +818,16 @@ class LiveConversationTest {
         connection.state.first { it is ConnectionState.Connected }
         val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
         session.start()
-        val voice = VoiceController(AudioApi(client), recorder, Silent, backgroundScope, backgroundScope, deviceLock = lock) { FakeCall() }
+        val voice = VoiceController(
+            AudioApi(client),
+            recorder,
+            Silent,
+            backgroundScope,
+            backgroundScope,
+            deviceLock = lock,
+            // What the chat says of its own (the acknowledgement, the wait) isn't what the turn says here.
+            narrationSpeaker = NarrationSpeaker { },
+        ) { FakeCall() }
         voice.startChat(session, gateway, null)
 
         socket.submits.first { it.size == 1 }
